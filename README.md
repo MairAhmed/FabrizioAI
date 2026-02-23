@@ -1,11 +1,11 @@
 # ⚽ FabrizioAI — Transfer Intelligence Agent
 
-> *"Here We Go!"* — An agentic AI chatbot that scrapes live football transfer news and delivers insights in the style of Fabrizio Romano, powered by Google Gemini and LangGraph.
+> An agentic AI chatbot that scrapes live football transfer news and delivers insights in the style of Fabrizio Romano, powered by Google Gemini and LangGraph.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.35%2B-red?style=flat-square&logo=streamlit)
 ![LangGraph](https://img.shields.io/badge/LangGraph-0.2%2B-green?style=flat-square)
-![Gemini](https://img.shields.io/badge/Gemini-2.0_Flash_Lite-orange?style=flat-square&logo=google)
+![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-orange?style=flat-square&logo=google)
 
 ---
 
@@ -13,10 +13,11 @@
 
 FabrizioAI is a fully agentic transfer news assistant. You ask it about any player, club, or transfer rumour — and it autonomously:
 
-1. **Searches its local knowledge base** (ChromaDB vector store) for cached articles
-2. **Scrapes live data** from 8 trusted football sources if needed
-3. **Reasons over the results** using Gemini and responds in character as FabrizioAI
-4. **Scores confidence** from 1 (rumour) to 5 (HERE WE GO ✅)
+1. **Searches its in-memory knowledge base** for previously scraped articles
+2. **Scrapes live data** from trusted football sources if needed
+3. **Falls back to Gemini's own knowledge** if scraping finds nothing
+4. **Reasons over all results** and responds in character as FabrizioAI
+5. **Scores confidence** from 1 (rumour) to 5 (HERE WE GO ✅)
 
 All of this happens in a LangGraph agent loop — Gemini decides what tools to call and when it has enough information to answer.
 
@@ -33,8 +34,8 @@ FabrizioAI/
 │   └── prompts.py       # Fabrizio Romano personality + agent instructions
 │
 ├── scripts/
-│   ├── scraper.py       # Concurrent web scraper (8 sources)
-│   └── processor.py     # ChromaDB vector store (embed + retrieve)
+│   ├── scraper.py       # Concurrent web scraper
+│   └── processor.py     # In-memory article store + keyword retrieval
 │
 ├── .env.example         # API key template
 ├── .gitignore
@@ -46,18 +47,12 @@ FabrizioAI/
 
 ## 📡 Data Sources
 
-The scraper pulls from:
-
 | Source | League Focus |
 |--------|-------------|
-| Fabrizio Romano (via Nitter) | All |
-| BBC Sport Transfers | Premier League |
-| Sky Sports Transfer News | Premier League |
-| Transfermarkt | All |
-| Marca | La Liga |
-| Calciomercato | Serie A |
-| Kicker | Bundesliga |
-| L'Equipe | Ligue 1 |
+| BBC Sport Transfers | All |
+| Goal.com Transfers | All |
+
+> Scraping runs concurrently with a 15s timeout. If a source fails, the agent falls back to Gemini's own training knowledge automatically.
 
 ---
 
@@ -124,7 +119,7 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 - *"Any Premier League deadline day news?"*
 - *"Latest confirmed transfers today"*
 - *"Which clubs are most active this window?"*
-- *"What's the latest on Mbappé?"*
+- *"What's the latest on Rashford?"*
 - *"Top Serie A signings this summer"*
 - *"Any Bundesliga rumours this week?"*
 
@@ -134,9 +129,11 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 | Setting | Description |
 |---------|-------------|
-| **Leagues to monitor** | Filter scraping and answers to specific leagues |
+| **Leagues to monitor** | Filter answers to specific leagues |
 | **Min. confidence to show** | Only show transfers above a confidence threshold (1–5) |
-| **Live web scrape** | Toggle real-time scraping on/off (off = knowledge base only, faster) |
+| **Live web scrape** | Toggle real-time scraping on/off (off = faster, uses Gemini knowledge only) |
+
+> 💡 Tip: Turn off **Live web scrape** to save API quota and get faster responses.
 
 ---
 
@@ -150,16 +147,17 @@ User Query
 │    Agent    │ ◄─────────────────────┐
 │  (Gemini)   │                       │
 └──────┬──────┘                       │
-       │ tool_calls?                  │
-    ┌──▼──┐                      ┌────┴────┐
-    │ Yes │──► Tool Execution ──►│ Results │
-    └─────┘   (scrape / search   └─────────┘
-    │ No  │    / assess)
+       │ tool_calls?              ┌────┴────┐
+    ┌──▼──┐                       │ Results │
+    │ Yes │──► Tool Execution ───►│         │
+    └─────┘   (scrape / search)   └─────────┘
+    │ No  │
     └──▼──┘
    Final Answer
+   (or LLM fallback if no data found)
 ```
 
-The agent runs a maximum of 2 tool calls per query to keep responses fast.
+The agent runs a **maximum of 2 tool calls** per query to keep responses fast.
 
 ---
 
@@ -180,25 +178,32 @@ The agent runs a maximum of 2 tool calls per query to keep responses fast.
 **`429 RESOURCE_EXHAUSTED`**
 Your free tier Gemini quota is used up. Options:
 - Wait for midnight PT reset
-- Create a new API key at [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
-- Enable billing on your Google Cloud project (very cheap)
+- Create a new API key in a **new project** at [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+- Enable billing on your Google Cloud project
 
-**`Model not found (404)`**
-The model name is outdated. The app uses `gemini-2.0-flash-lite` by default which is current as of 2026.
+> Free tier gives ~20 requests/day on Gemini 2.5 Flash. Each question uses ~2-3 requests due to the agent loop.
+
+**`404 NOT_FOUND` (model error)**
+The model name is outdated. The app uses `gemini-2.5-flash` which is the current stable model as of 2026.
+
+**Scraper failures in terminal**
+Normal — some sites block scrapers or change their URLs. The agent automatically falls back to Gemini's knowledge if scraping fails. These are warnings, not crashes.
 
 **Slow responses**
-Turn off **Live web scrape** in the sidebar for faster answers using the cached knowledge base only.
+Turn off **Live web scrape** in the sidebar for instant answers using Gemini's own knowledge.
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **[Streamlit](https://streamlit.io)** — UI
-- **[LangGraph](https://langchain-ai.github.io/langgraph/)** — Agentic graph / tool-calling loop
-- **[LangChain Google GenAI](https://python.langchain.com/docs/integrations/llms/google_ai)** — Gemini LLM + embeddings
-- **[ChromaDB](https://www.trychroma.com)** — Local vector database
-- **[BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/)** — Web scraping
-- **[Google Gemini 2.0 Flash Lite](https://ai.google.dev)** — LLM
+| Tool | Purpose |
+|------|---------|
+| [Streamlit](https://streamlit.io) | UI |
+| [LangGraph](https://langchain-ai.github.io/langgraph/) | Agentic graph / tool-calling loop |
+| [LangChain Google GenAI](https://python.langchain.com/docs/integrations/llms/google_ai) | Gemini LLM |
+| [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) | Web scraping |
+| In-memory keyword store | Fast article retrieval (no DB needed) |
+| [Google Gemini 2.5 Flash](https://ai.google.dev) | LLM backbone |
 
 ---
 
