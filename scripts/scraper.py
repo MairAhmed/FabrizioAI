@@ -15,73 +15,22 @@ from bs4 import BeautifulSoup
 # Each entry: { url, name, article_selector, title_sel, body_sel, league_tags }
 SOURCES = [
     {
-        "name": "Fabrizio Romano (Twitter/X via Nitter)",
-        "url": "https://nitter.poast.org/FabrizioRomano",
-        "type": "twitter_nitter",
-        "league_tags": ["All"],
-    },
-    {
         "name": "BBC Sport Transfers",
         "url": "https://www.bbc.com/sport/football/transfers",
         "type": "generic",
         "article_selector": "a[href*='/sport/football/']",
         "title_sel": "h1, h2",
         "body_sel": "article p",
-        "league_tags": ["Premier League"],
-    },
-    {
-        "name": "Sky Sports Transfers",
-        "url": "https://www.skysports.com/transfer-news",
-        "type": "generic",
-        "article_selector": "a.news-list__headline-link",
-        "title_sel": "h1",
-        "body_sel": ".article__body p",
-        "league_tags": ["Premier League", "All"],
-    },
-    {
-        "name": "Transfermarkt News",
-        "url": "https://www.transfermarkt.com/aktuell/newstransfers",
-        "type": "generic",
-        "article_selector": "a.news-title",
-        "title_sel": "h1",
-        "body_sel": ".tm-article__content p",
         "league_tags": ["All"],
     },
     {
-        "name": "Marca Transfers",
-        "url": "https://www.marca.com/en/football/transfers.html",
+        "name": "Goal.com Transfers",
+        "url": "https://www.goal.com/en/transfer-news",
         "type": "generic",
-        "article_selector": "a.ue-c-cover-content__link",
+        "article_selector": "a[href*='/en/news/']",
         "title_sel": "h1",
-        "body_sel": ".article-body p",
-        "league_tags": ["La Liga"],
-    },
-    {
-        "name": "Calciomercato",
-        "url": "https://www.calciomercato.com/en",
-        "type": "generic",
-        "article_selector": "a.article-link",
-        "title_sel": "h1",
-        "body_sel": ".article-text p",
-        "league_tags": ["Serie A"],
-    },
-    {
-        "name": "Kicker Transfers",
-        "url": "https://www.kicker.de/bundesliga/transfers",
-        "type": "generic",
-        "article_selector": "a.kick__article-teaser",
-        "title_sel": "h1",
-        "body_sel": ".kick__article__body p",
-        "league_tags": ["Bundesliga"],
-    },
-    {
-        "name": "L'Equipe Transfers",
-        "url": "https://www.lequipe.fr/Football/Transferts/",
-        "type": "generic",
-        "article_selector": "a.Article__link",
-        "title_sel": "h1",
-        "body_sel": ".content-article p",
-        "league_tags": ["Ligue 1"],
+        "body_sel": ".article-content p",
+        "league_tags": ["All"],
     },
 ]
 
@@ -149,32 +98,7 @@ class TransferScraper:
         ]
 
     def _scrape_source(self, source: dict) -> list[dict]:
-        if source["type"] == "twitter_nitter":
-            return self._scrape_nitter(source)
         return self._scrape_generic(source)
-
-    def _scrape_nitter(self, source: dict) -> list[dict]:
-        """Scrape Nitter (Twitter mirror) for Fabrizio Romano tweets."""
-        resp = requests.get(source["url"], headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        articles = []
-
-        for tweet_div in soup.select(".tweet-content")[:10]:
-            text = tweet_div.get_text(separator=" ", strip=True)
-            if not text:
-                continue
-            confidence = self._estimate_confidence(text)
-            articles.append({
-                "title": text[:120],
-                "text": text,
-                "source": source["name"],
-                "url": source["url"],
-                "date": datetime.date.today().isoformat(),
-                "league_tags": source["league_tags"],
-                "confidence": confidence,
-            })
-        return articles
 
     def _scrape_generic(self, source: dict) -> list[dict]:
         """Generic scraper for news sites."""

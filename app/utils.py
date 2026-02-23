@@ -186,7 +186,7 @@ class FabrizioAI:
     and reasons over results before giving a final answer.
     """
 
-    def __init__(self, model_name: str = "gemini-2.0-flash-lite"):
+    def __init__(self, model_name: str = "gemini-2.5-flash"):
         api_key = os.environ["GEMINI_API_KEY"]
 
         # Bind tools to Gemini via LangChain
@@ -243,9 +243,20 @@ class FabrizioAI:
                 "confidence_label": "Error",
             }
 
-        # Extract the final AI message
+        # Extract the final AI message — Gemini 2.5 may return content as a list
         ai_messages = [m for m in final_state["messages"] if isinstance(m, AIMessage)]
-        raw_answer = ai_messages[-1].content if ai_messages else "No response generated."
+        if not ai_messages:
+            return {"answer": "No response generated.", "sources": [], "confidence": 0, "confidence_label": "Error"}
+
+        last_msg = ai_messages[-1]
+        raw_answer = last_msg.content
+
+        # Flatten list content to string
+        if isinstance(raw_answer, list):
+            raw_answer = " ".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in raw_answer
+            )
 
         # Pull sources from ToolMessages
         sources = self._extract_sources(final_state["messages"])
@@ -325,8 +336,17 @@ class FabrizioAI:
         return sources
 
     @staticmethod
-    def _parse_response(raw_text: str, fallback_sources: list[str]) -> dict:
-        """Parse Gemini's JSON response, falling back to plain text gracefully."""
+    def _parse_response(raw_text, fallback_sources: list[str]) -> dict:
+        """Parse Gemini's response, handling both string and list content types."""
+        # Gemini 2.5 returns content as a list of parts — flatten to string
+        if isinstance(raw_text, list):
+            raw_text = " ".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in raw_text
+            )
+        elif not isinstance(raw_text, str):
+            raw_text = str(raw_text)
+
         json_match = re.search(r"```json\s*(.*?)\s*```", raw_text, re.DOTALL)
         if json_match:
             try:

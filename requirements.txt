@@ -18,8 +18,8 @@ requests>=2.32.0
 beautifulsoup4>=4.12.3
 lxml>=5.2.0
 
-# ── Vector database (local, no server needed) ──
-chromadb>=0.5.3
+# ── Vector store (in-memory, no DB needed) ────
+# chromadb removed - using lightweight in-memory keyword store instead
 
 # ── Environment variables ──────────────────────
 python-dotenv>=1.0.1
