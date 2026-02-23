@@ -1,0 +1,28 @@
+# ─────────────────────────────────────────────
+#  FabrizioAI – Requirements (2026 stable)
+#  Install with: pip install -r requirements.txt
+# ─────────────────────────────────────────────
+
+# Streamlit UI
+streamlit>=1.35.0
+
+# ── LangGraph + LangChain (the agentic layer) ──
+langgraph>=0.2.0
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-google-genai>=1.0.7     # Gemini LLM + embeddings via LangChain
+google-generativeai>=0.8.0        # Required by chromadb + langchain-google-genai
+
+# ── Web scraping ───────────────────────────────
+requests>=2.32.0
+beautifulsoup4>=4.12.3
+lxml>=5.2.0
+
+# ── Vector database (local, no server needed) ──
+chromadb>=0.5.3
+
+# ── Environment variables ──────────────────────
+python-dotenv>=1.0.1
+
+# ── Utilities ──────────────────────────────────
+tqdm>=4.66.0
