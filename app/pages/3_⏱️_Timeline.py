@@ -1,20 +1,21 @@
 """
 pages/3_⏱️_Timeline.py – Transfer Timeline
-Chronological feed of all KB articles grouped by date,
-with a visual timeline spine, confidence colour-coding,
-and league/confidence filters.
+Player-focused chronological feed: extracts player name and clubs from
+article titles, groups by date, shows joining/leaving direction with
+visual from→to cards.
 """
 
 import sys
 import re
+import datetime as dt
 from pathlib import Path
 from collections import defaultdict
 
 import streamlit as st
 
 # ── Path setup ────────────────────────────────────────────────────────────
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))               # app/
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))   # scripts/
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 from processor import TransferProcessor
 
@@ -66,11 +67,110 @@ SOURCE_LEAGUE_MAP = {
     "Saudi Pro League News": "Saudi Pro League",
 }
 
+
+# ── Player + club extraction ──────────────────────────────────────────────
+
+def _clean(s: str) -> str:
+    return re.sub(r'\s+', ' ', s).strip().rstrip(".,!;:")
+
+
+def parse_transfer(title: str, text: str = "") -> dict:
+    """
+    Try to extract: player, to_club, from_club, direction ('joining'/'leaving').
+    Returns a dict; player=None means no individual player was identified.
+    """
+    result = {"player": None, "to_club": None, "from_club": None, "direction": None}
+    t = title  # original case
+
+    # ── Pattern A: "HERE WE GO! Player to Club" ───────────────────────────
+    m = re.match(
+        r'(?:here\s+we\s+go[!.]?\s+)?'
+        r'([A-Z][a-záéíóúàèùâêîôûäëïöü\'\-]+(?:\s+(?:de\s+|van\s+|van\s+der\s+|el\s+|al\s+)?'
+        r'[A-Z][a-záéíóúàèùâêîôûäëïöü\'\-]+){1,3})'
+        r'\s+(?:to|joins?|signs?\s+for|signs?|moves?\s+to|heading\s+to|'
+        r'set\s+to\s+join|close\s+to\s+joining|nearing\s+move\s+to|'
+        r'completes?\s+move\s+to|agrees?\s+to\s+join|confirmed\s+at)\s+'
+        r'([A-Z][A-Za-záéíóú\s\.\-\']+?)(?:\s*[,!;:\-]|\s+(?:on|for|in|at|with|after|as|from)\b|$)',
+        t, re.IGNORECASE,
+    )
+    if m:
+        result["player"]    = _clean(m.group(1))
+        result["to_club"]   = _clean(m.group(2))
+        result["direction"] = "joining"
+        return result
+
+    # ── Pattern B: "Club sign(s)/agree/complete Player" ──────────────────
+    m = re.match(
+        r'([A-Z][A-Za-záéíóú\s\.\-\']{3,40}?)\s+'
+        r'(?:sign|signs|agree|agrees|complete|completes|confirm|confirms|land|lands|'
+        r'secure|secures|announce|announces)\s+'
+        r'(?:deal\s+for\s+|signing\s+of\s+|transfer\s+of\s+)?'
+        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})',
+        t,
+    )
+    if m:
+        result["to_club"]   = _clean(m.group(1))
+        result["player"]    = _clean(m.group(2))
+        result["direction"] = "joining"
+        return result
+
+    # ── Pattern C: "Player set to leave / leaves / exits Club" ───────────
+    m = re.match(
+        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})'
+        r'\s+(?:leaves?|exits?|departs?|set\s+to\s+leave|expected\s+to\s+leave|'
+        r'wants?\s+to\s+leave|could\s+leave|looking\s+to\s+leave|'
+        r'will\s+leave|officially\s+leaves?)'
+        r'(?:\s+([A-Z][A-Za-záéíóú\s\.\-\']+?)(?:\s*[,;:\-]|$))?',
+        t, re.IGNORECASE,
+    )
+    if m:
+        result["player"]    = _clean(m.group(1))
+        result["from_club"] = _clean(m.group(2)) if m.group(2) else None
+        result["direction"] = "leaving"
+        return result
+
+    # ── Pattern D: "Club target/eye/want Player" ─────────────────────────
+    m = re.match(
+        r'([A-Z][A-Za-záéíóú\s\.\-\']{3,40}?)\s+'
+        r'(?:target|targets|eye|eyes|want|wants|pursuing|consider|considers|'
+        r'monitor|monitors|interested\s+in|bid\s+for|make\s+move\s+for)\s+'
+        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})',
+        t,
+    )
+    if m:
+        result["to_club"]   = _clean(m.group(1))
+        result["player"]    = _clean(m.group(2))
+        result["direction"] = "joining"
+        return result
+
+    # ── Pattern E: "Player from Club to Club" ────────────────────────────
+    m = re.match(
+        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})'
+        r'\s+from\s+([A-Z][A-Za-záéíóú\s\.\-\']+?)'
+        r'\s+to\s+([A-Z][A-Za-záéíóú\s\.\-\']+?)(?:\s*[,;:\-]|$)',
+        t, re.IGNORECASE,
+    )
+    if m:
+        result["player"]    = _clean(m.group(1))
+        result["from_club"] = _clean(m.group(2))
+        result["to_club"]   = _clean(m.group(3))
+        result["direction"] = "joining"
+        return result
+
+    return result
+
+
+def article_league(article: dict) -> str:
+    tags = article.get("league_tags", [])
+    if tags and tags[0] != "All":
+        return tags[0]
+    return SOURCE_LEAGUE_MAP.get(article.get("source", ""), "All")
+
+
 # ── CSS ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap');
-
   html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
   h1, h2, h3, h4 { font-family: 'Oswald', sans-serif; letter-spacing: 0.03em; }
   .stApp { background: #0d0d0d; color: #f0f0f0; }
@@ -82,159 +182,154 @@ st.markdown("""
     border-radius: 10px;
     margin-bottom: 1.5rem;
   }
-  .tl-header h1  { color: #fff; font-size: 2rem; margin: 0; }
+  .tl-header h1   { color: #fff; font-size: 2rem; margin: 0; }
   .tl-header .sub { color: #f59e0b; font-size: 0.82rem; letter-spacing: 0.15em; text-transform: uppercase; }
 
-  /* Date group header */
+  /* Date separator */
   .date-group {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin: 2rem 0 0.8rem 0;
+    display: flex; align-items: center; gap: 1rem;
+    margin: 2.2rem 0 1rem 0;
   }
   .date-badge {
     font-family: 'Oswald', sans-serif;
-    font-size: 1rem;
-    color: #f59e0b;
-    background: #1c1500;
-    border: 1px solid #78350f;
-    border-radius: 8px;
-    padding: 4px 14px;
-    white-space: nowrap;
-    flex-shrink: 0;
+    font-size: 1rem; color: #f59e0b;
+    background: #1c1500; border: 1px solid #78350f;
+    border-radius: 8px; padding: 4px 14px;
+    white-space: nowrap; flex-shrink: 0;
   }
   .date-line {
-    flex: 1;
-    height: 1px;
-    background: linear-gradient(to right, #78350f44, transparent);
+    flex: 1; height: 1px;
+    background: linear-gradient(to right, #78350f55, transparent);
   }
 
-  /* Timeline entry */
-  .tl-entry {
-    display: flex;
-    gap: 0;
-    margin: 0 0 0.7rem 1.2rem;
-    position: relative;
+  /* Timeline row */
+  .tl-row {
+    display: flex; gap: 0;
+    margin: 0 0 0.6rem 1.4rem;
   }
-  /* Vertical spine */
   .tl-spine {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 28px;
-    flex-shrink: 0;
+    display: flex; flex-direction: column;
+    align-items: center; width: 26px; flex-shrink: 0;
   }
   .tl-dot {
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    border: 2px solid;
-    flex-shrink: 0;
-    margin-top: 4px;
+    width: 12px; height: 12px;
+    border-radius: 50%; border: 2px solid;
+    flex-shrink: 0; margin-top: 6px;
   }
-  .tl-line {
-    width: 2px;
-    flex: 1;
-    min-height: 20px;
-    background: #1e293b;
-    margin-top: 3px;
+  .tl-vline {
+    width: 2px; flex: 1; min-height: 18px;
+    background: #1e293b; margin-top: 3px;
   }
 
-  /* Card */
-  .tl-card {
-    flex: 1;
-    background: linear-gradient(135deg, #111827 0%, #1e293b 100%);
+  /* ── PLAYER TRANSFER CARD ── */
+  .ptcard {
+    flex: 1; margin-left: 10px;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
     border: 1px solid;
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    margin-left: 8px;
-    margin-bottom: 2px;
+    border-radius: 10px;
+    padding: 0.85rem 1.1rem;
     transition: transform 0.15s;
   }
-  .tl-card:hover { transform: translateX(2px); }
-  .tl-title {
-    font-family: 'Oswald', sans-serif;
-    font-size: 0.97rem;
-    color: #f1f5f9;
-    line-height: 1.3;
-    margin: 0 0 0.35rem 0;
-  }
-  .tl-body {
-    font-size: 0.80rem;
-    color: #94a3b8;
-    line-height: 1.5;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    margin: 0 0 0.5rem 0;
-  }
-  .tl-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
-  }
-  .tl-chip {
-    display: inline-block;
-    font-size: 0.68rem;
-    padding: 1px 7px;
-    border-radius: 5px;
-    border-width: 1px;
-    border-style: solid;
-  }
-  .tl-conf-pill {
-    display: inline-block;
-    font-family: 'Oswald', sans-serif;
-    font-size: 0.65rem;
-    letter-spacing: 0.06em;
-    padding: 1px 8px;
-    border-radius: 10px;
-    border-width: 1px;
-    border-style: solid;
-  }
-  .tl-source-link {
-    font-size: 0.70rem;
-    color: #60a5fa;
-    text-decoration: none;
-  }
-  .tl-source-link:hover { text-decoration: underline; }
+  .ptcard:hover { transform: translateX(3px); }
 
-  /* Conf bar */
+  /* Player name row */
+  .ptcard-name {
+    font-family: 'Oswald', sans-serif;
+    font-size: 1.15rem; font-weight: 600;
+    color: #f1f5f9; margin: 0 0 0.45rem 0;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+
+  /* From → To clubs row */
+  .clubs-row {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 0.5rem 0; flex-wrap: wrap;
+  }
+  .club-pill {
+    display: inline-block;
+    font-size: 0.82rem; font-weight: 500;
+    padding: 3px 11px; border-radius: 6px;
+    border: 1px solid #334155;
+    color: #cbd5e1; background: #1e293b;
+  }
+  .club-arrow {
+    font-size: 1rem; color: #f59e0b; font-weight: 700;
+  }
+  .dir-badge-join {
+    display: inline-block;
+    font-family: 'Oswald', sans-serif;
+    font-size: 0.65rem; letter-spacing: 0.08em;
+    padding: 2px 8px; border-radius: 10px;
+    background: #052e0f; color: #86efac;
+    border: 1px solid #22c55e55;
+  }
+  .dir-badge-leave {
+    display: inline-block;
+    font-family: 'Oswald', sans-serif;
+    font-size: 0.65rem; letter-spacing: 0.08em;
+    padding: 2px 8px; border-radius: 10px;
+    background: #2d0a0a; color: #fca5a5;
+    border: 1px solid #ef444455;
+  }
+
+  /* Confidence bar */
   .mini-bar-bg {
-    background: #1e293b;
-    border-radius: 3px;
-    height: 4px;
-    overflow: hidden;
-    margin: 5px 0 4px;
-    width: 100%;
+    background: #0f172a; border-radius: 3px;
+    height: 4px; overflow: hidden; margin: 6px 0 5px;
   }
   .mini-bar-fill { height: 100%; border-radius: 3px; }
 
-  /* Empty state */
-  .empty-tl {
-    text-align: center;
-    padding: 4rem 2rem;
-    color: #4b5563;
+  /* Meta row */
+  .ptcard-meta {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    margin-top: 4px;
   }
-  .empty-tl h3 { color: #6b7280; }
+  .meta-chip {
+    display: inline-block; font-size: 0.68rem;
+    padding: 1px 7px; border-radius: 5px;
+    border: 1px solid;
+  }
+  .conf-pill {
+    display: inline-block;
+    font-family: 'Oswald', sans-serif; font-size: 0.65rem;
+    letter-spacing: 0.06em; padding: 1px 8px;
+    border-radius: 10px; border: 1px solid;
+  }
+  .src-link {
+    font-size: 0.70rem; color: #60a5fa; text-decoration: none;
+  }
+  .src-link:hover { text-decoration: underline; }
+
+  /* Generic news card (no player parsed) */
+  .news-card {
+    flex: 1; margin-left: 10px;
+    background: #111827;
+    border: 1px solid #1e2a3a;
+    border-radius: 8px;
+    padding: 0.65rem 1rem;
+    transition: transform 0.15s;
+    opacity: 0.72;
+  }
+  .news-card:hover { transform: translateX(2px); opacity: 1; }
+  .news-title {
+    font-size: 0.88rem; color: #94a3b8; line-height: 1.4;
+    margin: 0 0 4px 0;
+  }
 
   /* Sidebar */
   section[data-testid="stSidebar"] {
-    background: #0a0a0a;
-    border-right: 1px solid #1e1e2e;
+    background: #0a0a0a; border-right: 1px solid #1e1e2e;
   }
-
   .stat-box {
-    background: #111827;
-    border: 1px solid #1e3a5f;
-    border-radius: 8px;
-    padding: 0.5rem 0.8rem;
-    margin: 0.3rem 0;
-    text-align: center;
+    background: #111827; border: 1px solid #1e3a5f;
+    border-radius: 8px; padding: 0.5rem 0.8rem;
+    margin: 0.3rem 0; text-align: center;
   }
   .stat-box .val { font-family:'Oswald',sans-serif; font-size:1.3rem; color:#e2e8f0; }
-  .stat-box .lbl { font-size: 0.70rem; color: #64748b; }
+  .stat-box .lbl { font-size:0.70rem; color:#64748b; }
+
+  .empty-tl { text-align:center; padding:4rem 2rem; color:#4b5563; }
+  .empty-tl h3 { color:#6b7280; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -243,7 +338,7 @@ st.markdown("""
 st.markdown("""
 <div class="tl-header">
   <h1>⏱️ Transfer Timeline</h1>
-  <div class="sub">Chronological history · Grouped by date · Colour-coded by confidence</div>
+  <div class="sub">Player movements · Joining &amp; leaving · Grouped by date</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -258,15 +353,22 @@ with st.sidebar:
          "Ligue 1", "MLS", "Saudi Pro League"],
         default=["All"],
     )
-    min_conf = st.slider(
-        "Min. confidence", 1, 5, 1,
-        help="1 = show all · 5 = confirmed only",
+    min_conf = st.slider("Min. confidence", 1, 5, 1,
+                         help="1 = all · 5 = confirmed only")
+    direction_filter = st.radio(
+        "Direction",
+        ["All moves", "Joining ✈️", "Leaving 🚪"],
+        horizontal=True,
     )
     search_term = st.text_input(
         "Search player / club",
-        placeholder="e.g. Mbappe, Arsenal",
+        placeholder="e.g. Bellingham, Arsenal",
     )
     max_days = st.slider("Days to show", 1, 30, 7)
+    show_news = st.toggle(
+        "Show general news (no player)", value=False,
+        help="Show articles where no specific player was identified",
+    )
 
     st.divider()
     stats = _processor.stats()
@@ -275,76 +377,97 @@ with st.sidebar:
     with c1:
         st.markdown(
             f'<div class="stat-box"><div class="val">{stats["total_articles"]}</div>'
-            f'<div class="lbl">Articles</div></div>', unsafe_allow_html=True,
-        )
+            f'<div class="lbl">Articles</div></div>', unsafe_allow_html=True)
     with c2:
         st.markdown(
             f'<div class="stat-box"><div class="val">{len(stats["sources_scraped"])}</div>'
-            f'<div class="lbl">Sources</div></div>', unsafe_allow_html=True,
-        )
+            f'<div class="lbl">Sources</div></div>', unsafe_allow_html=True)
 
     if st.button("← Back to Chat", use_container_width=True):
         st.switch_page("main.py")
 
 
-# ── Fetch + filter articles ─────────────────────────────────────────────────
-all_articles = _processor.get_recent_articles(limit=300, min_confidence=min_conf)
+# ── Fetch + parse articles ──────────────────────────────────────────────────
+all_articles = _processor.get_recent_articles(limit=500, min_confidence=min_conf)
+cutoff = (dt.date.today() - dt.timedelta(days=max_days)).isoformat()
 
-def article_league(article: dict) -> str:
-    src = article.get("source", "")
-    tags = article.get("league_tags", [])
-    if tags and tags[0] != "All":
-        return tags[0]
-    return SOURCE_LEAGUE_MAP.get(src, "All")
+enriched = []
+for a in all_articles:
+    if a.get("date", "9999-12-31") < cutoff:
+        continue
 
-def article_matches_league(article: dict, filters: list) -> bool:
-    if "All" in filters:
-        return True
-    league = article_league(article)
-    if league == "All":
-        return True
-    return league in filters
+    # League filter
+    league = article_league(a)
+    if "All" not in league_filter:
+        if league not in league_filter and league != "All":
+            continue
 
-def article_matches_search(article: dict, term: str) -> bool:
-    if not term.strip():
-        return True
-    haystack = (article.get("title", "") + " " + article.get("text", "")).lower()
-    return term.lower() in haystack
+    # Parse player info
+    info = parse_transfer(a.get("title", ""), a.get("text", ""))
+    a["_player"]    = info["player"]
+    a["_to_club"]   = info["to_club"]
+    a["_from_club"] = info["from_club"]
+    a["_direction"] = info["direction"]
+    a["_league"]    = league
+    a["_has_player"] = info["player"] is not None
 
-import datetime as dt
-cutoff_date = (dt.date.today() - dt.timedelta(days=max_days)).isoformat()
+    # Direction filter
+    if direction_filter == "Joining ✈️" and info["direction"] not in (None, "joining"):
+        continue
+    if direction_filter == "Leaving 🚪" and info["direction"] != "leaving":
+        continue
 
-filtered = [
-    a for a in all_articles
-    if article_matches_league(a, league_filter)
-    and article_matches_search(a, search_term)
-    and a.get("date", "9999-12-31") >= cutoff_date
-]
+    # Search filter
+    if search_term.strip():
+        haystack = (
+            (info["player"] or "") + " " +
+            (info["to_club"] or "") + " " +
+            (info["from_club"] or "") + " " +
+            a.get("title", "")
+        ).lower()
+        if search_term.lower() not in haystack:
+            continue
+
+    # Skip general news unless toggled
+    if not info["player"] and not show_news:
+        continue
+
+    enriched.append(a)
 
 # Group by date descending
 by_date: dict[str, list] = defaultdict(list)
-for a in filtered:
+for a in enriched:
     by_date[a.get("date", "Unknown")].append(a)
-
 sorted_dates = sorted(by_date.keys(), reverse=True)
 
 
+# ── Summary counts ─────────────────────────────────────────────────────────
+player_articles = [a for a in enriched if a["_has_player"]]
+joining = sum(1 for a in player_articles if a["_direction"] == "joining")
+leaving = sum(1 for a in player_articles if a["_direction"] == "leaving")
+
+if enriched:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total entries", len(enriched))
+    c2.metric("Players tracked", len({a["_player"] for a in player_articles if a["_player"]}))
+    c3.metric("Joining ✈️", joining)
+    c4.metric("Leaving 🚪", leaving)
+    st.divider()
+
+
 # ── Render ──────────────────────────────────────────────────────────────────
-if not filtered:
+if not enriched:
     st.markdown("""
     <div class="empty-tl">
-      <h3>📭 No articles in this range</h3>
-      <p>Adjust the filters or scrape fresh articles from the
-         <strong>News Feed</strong> page.</p>
+      <h3>📭 No transfer movements found</h3>
+      <p>Try adjusting the filters, expanding the date range,<br>
+         or scraping fresh articles from the <strong>📰 News Feed</strong> page.</p>
     </div>
     """, unsafe_allow_html=True)
 else:
-    st.caption(f"Showing **{len(filtered)}** articles across **{len(sorted_dates)}** days")
-
     for date_str in sorted_dates:
         articles = by_date[date_str]
 
-        # Pretty-print date
         try:
             d = dt.date.fromisoformat(date_str)
             today = dt.date.today()
@@ -357,59 +480,112 @@ else:
         except ValueError:
             label = date_str
 
-        count = len(articles)
+        n = len(articles)
         st.markdown(
             f'<div class="date-group">'
-            f'  <div class="date-badge">📅 {label} &nbsp;·&nbsp; {count} article{"s" if count != 1 else ""}</div>'
+            f'  <div class="date-badge">📅 {label} &nbsp;·&nbsp; '
+            f'    {n} move{"s" if n != 1 else ""}'
+            f'  </div>'
             f'  <div class="date-line"></div>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
-        for idx, article in enumerate(articles):
-            conf      = article.get("confidence", 1)
+        for idx, a in enumerate(articles):
+            conf      = a.get("confidence", 1)
             cp        = CONF_COLORS.get(conf, CONF_COLORS[1])
             conf_pct  = int((conf / 5) * 100)
-
-            league    = article_league(article)
-            lp        = LEAGUE_COLORS.get(league, LEAGUE_COLORS["All"])
-
-            title     = article.get("title", "No title")
-            body      = article.get("text", "")[:220]
-            url       = article.get("url", "#")
-            source    = article.get("source", "Unknown")
-
+            lp        = LEAGUE_COLORS.get(a["_league"], LEAGUE_COLORS["All"])
             is_last   = (idx == len(articles) - 1)
-            spine_line = "" if is_last else '<div class="tl-line"></div>'
+            vline     = "" if is_last else '<div class="tl-vline"></div>'
+            url       = a.get("url", "#")
+            source    = a.get("source", "Unknown")
+            title     = a.get("title", "No title")
 
-            st.markdown(
-                f'<div class="tl-entry">'
-                f'  <div class="tl-spine">'
-                f'    <div class="tl-dot" style="border-color:{cp["border"]};'
-                f'         background:{cp["bg"]};"></div>'
-                f'    {spine_line}'
-                f'  </div>'
-                f'  <div class="tl-card" style="border-color:{cp["border"]}22;">'
-                f'    <div class="tl-title">{title}</div>'
-                f'    <div class="mini-bar-bg">'
-                f'      <div class="mini-bar-fill"'
-                f'           style="width:{conf_pct}%;background:{cp["border"]};"></div>'
-                f'    </div>'
-                f'    <div class="tl-body">{body}{"…" if len(article.get("text","")) > 220 else ""}</div>'
-                f'    <div class="tl-meta">'
-                f'      <span class="tl-conf-pill"'
-                f'            style="background:{cp["bg"]};color:{cp["text"]};'
-                f'                   border-color:{cp["border"]}66;">'
-                f'        {cp["label"]}'
-                f'      </span>'
-                f'      <span class="tl-chip"'
-                f'            style="background:{lp["bg"]};color:{lp["text"]};'
-                f'                   border-color:{lp["border"]};">'
-                f'        {league}'
-                f'      </span>'
-                f'      <a class="tl-source-link" href="{url}" target="_blank">📡 {source}</a>'
-                f'    </div>'
-                f'  </div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            if a["_has_player"]:
+                # ── Player transfer card ─────────────────────────────────
+                player    = a["_player"]
+                to_club   = a["_to_club"]
+                from_club = a["_from_club"]
+                direction = a["_direction"]
+
+                # Clubs row HTML
+                if direction == "joining":
+                    dir_badge = '<span class="dir-badge-join">✈️ JOINING</span>'
+                    if from_club and to_club:
+                        clubs_html = (
+                            f'<span class="club-pill">🏟️ {from_club}</span>'
+                            f'<span class="club-arrow">→</span>'
+                            f'<span class="club-pill" style="border-color:{cp["border"]}55;'
+                            f'color:{cp["text"]};">'
+                            f'🎯 {to_club}</span>'
+                        )
+                    elif to_club:
+                        clubs_html = (
+                            f'<span class="club-pill" style="border-color:{cp["border"]}55;'
+                            f'color:{cp["text"]};">'
+                            f'🎯 {to_club}</span>'
+                        )
+                    else:
+                        clubs_html = ""
+                else:
+                    dir_badge = '<span class="dir-badge-leave">🚪 LEAVING</span>'
+                    if from_club:
+                        clubs_html = (
+                            f'<span class="club-pill" style="border-color:#ef444455;'
+                            f'color:#fca5a5;">🏟️ {from_club}</span>'
+                            f'<span class="club-arrow" style="color:#ef4444;">→</span>'
+                            f'<span class="club-pill">❓ Destination TBD</span>'
+                        )
+                    else:
+                        clubs_html = ""
+
+                clubs_section = (
+                    f'<div class="clubs-row">{clubs_html}</div>'
+                    if clubs_html else ""
+                )
+                st.markdown(
+                    f'<div class="tl-row">'
+                    f'  <div class="tl-spine">'
+                    f'    <div class="tl-dot" style="border-color:{cp["border"]};background:{cp["bg"]};"></div>'
+                    f'    {vline}'
+                    f'  </div>'
+                    f'  <div class="ptcard" style="border-color:{cp["border"]}44;">'
+                    f'    <div class="ptcard-name">'
+                    f'      👤 {player}'
+                    f'      {dir_badge}'
+                    f'    </div>'
+                    f'    {clubs_section}'
+                    f'    <div class="mini-bar-bg">'
+                    f'      <div class="mini-bar-fill" style="width:{conf_pct}%;background:{cp["border"]};"></div>'
+                    f'    </div>'
+                    f'    <div class="ptcard-meta">'
+                    f'      <span class="conf-pill" style="background:{cp["bg"]};color:{cp["text"]};'
+                    f'             border-color:{cp["border"]}66;">{cp["label"]}</span>'
+                    f'      <span class="meta-chip" style="background:{lp["bg"]};color:{lp["text"]};'
+                    f'             border-color:{lp["border"]};">{a["_league"]}</span>'
+                    f'      <a class="src-link" href="{url}" target="_blank">📡 {source}</a>'
+                    f'    </div>'
+                    f'  </div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                # ── Generic news card ────────────────────────────────────
+                st.markdown(
+                    f'<div class="tl-row">'
+                    f'  <div class="tl-spine">'
+                    f'    <div class="tl-dot" style="border-color:#334155;background:#1e293b;"></div>'
+                    f'    {vline}'
+                    f'  </div>'
+                    f'  <div class="news-card">'
+                    f'    <div class="news-title">📰 {title}</div>'
+                    f'    <div class="ptcard-meta">'
+                    f'      <span class="conf-pill" style="background:{cp["bg"]};color:{cp["text"]};'
+                    f'             border-color:{cp["border"]}66;">{cp["label"]}</span>'
+                    f'      <a class="src-link" href="{url}" target="_blank">📡 {source}</a>'
+                    f'    </div>'
+                    f'  </div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
