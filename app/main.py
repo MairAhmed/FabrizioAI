@@ -39,23 +39,28 @@ st.set_page_config(
 
 # ── League palette ────────────────────────────────────────────────────────
 LEAGUE_COLORS = {
-    "Premier League":  {"bg": "#3d195b", "text": "#c8a2e8", "border": "#6a2e9e"},
-    "La Liga":         {"bg": "#9b1c1c", "text": "#fca5a5", "border": "#dc2626"},
-    "Serie A":         {"bg": "#1e3a5f", "text": "#93c5fd", "border": "#2563eb"},
-    "Bundesliga":      {"bg": "#1a1a00", "text": "#fde047", "border": "#ca8a04"},
-    "Ligue 1":         {"bg": "#003153", "text": "#7dd3fc", "border": "#0369a1"},
-    "All":             {"bg": "#1e2a1e", "text": "#86efac", "border": "#16a34a"},
+    "Premier League":   {"bg": "#3d195b", "text": "#c8a2e8", "border": "#6a2e9e"},
+    "La Liga":          {"bg": "#9b1c1c", "text": "#fca5a5", "border": "#dc2626"},
+    "Serie A":          {"bg": "#1e3a5f", "text": "#93c5fd", "border": "#2563eb"},
+    "Bundesliga":       {"bg": "#1a1a00", "text": "#fde047", "border": "#ca8a04"},
+    "Ligue 1":          {"bg": "#003153", "text": "#7dd3fc", "border": "#0369a1"},
+    "MLS":              {"bg": "#002f6c", "text": "#7fb3f5", "border": "#1a56a0"},
+    "Saudi Pro League": {"bg": "#003d1a", "text": "#6ee09a", "border": "#00a651"},
+    "All":              {"bg": "#1e2a1e", "text": "#86efac", "border": "#16a34a"},
 }
 
 SOURCE_LEAGUE_MAP = {
-    "BBC Sport Transfers":  "All",
-    "Goal.com Transfers":   "All",
-    "Sky Sports Transfers": "Premier League",
-    "Transfermarkt News":   "All",
-    "Calciomercato":        "Serie A",
-    "Marca Transfers":      "La Liga",
-    "L'Equipe Football":    "Ligue 1",
-    "Kicker Transfers":     "Bundesliga",
+    "ESPN Soccer":           "All",
+    "BBC Sport Transfers":   "All",
+    "Goal.com Transfers":    "All",
+    "Sky Sports Transfers":  "Premier League",
+    "Transfermarkt News":    "All",
+    "Calciomercato":         "Serie A",
+    "Marca Transfers":       "La Liga",
+    "L'Equipe Football":     "Ligue 1",
+    "Kicker Transfers":      "Bundesliga",
+    "MLS Soccer":            "MLS",
+    "Saudi Pro League News": "Saudi Pro League",
 }
 
 # ── Global CSS ────────────────────────────────────────────────────────────
@@ -359,7 +364,7 @@ st.markdown("""
     <h1>⚽ FabrizioAI</h1>
     <div class="subtitle">
       <span class="live-dot"></span>
-      Transfer Intelligence · Gemini + Live Scraping · 8 Sources
+      Transfer Intelligence · Gemini + Live Scraping · 11 Sources
     </div>
   </div>
 </div>
@@ -372,7 +377,7 @@ with st.sidebar:
 
     league_filter = st.multiselect(
         "Leagues to monitor",
-        ["Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1", "All"],
+        ["Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1", "MLS", "Saudi Pro League", "All"],
         default=["All"],
     )
     confidence_threshold = st.slider(
@@ -407,6 +412,8 @@ with st.sidebar:
         "Any Premier League deadline day news?",
         "Top Serie A signings this window",
         "Bundesliga transfer latest",
+        "Ligue 1 transfer news",
+        "Latest MLS transfer news",
     ]
     for qp in quick_prompts:
         if st.button(qp, use_container_width=True, key=f"qp_{qp}"):
@@ -477,7 +484,7 @@ with st.sidebar:
 
     st.markdown("""
     <div style="color:#374151;font-size:0.7rem;margin-top:1rem;line-height:1.5;">
-    FabrizioAI aggregates 8 football sources with Gemini reasoning.
+    FabrizioAI aggregates 11 football sources with Gemini reasoning.
     Always verify with official club announcements.
     </div>
     """, unsafe_allow_html=True)
@@ -488,16 +495,16 @@ if auto_refresh:
     elapsed = time.time() - st.session_state.last_auto_refresh
     if elapsed >= refresh_mins * 60:
         st.session_state.last_auto_refresh = time.time()
-        with st.toast("🔄 Auto-refreshing transfer news…"):
-            try:
-                st.session_state.fabrizio.get_transfer_insight(
-                    query="latest transfer news today",
-                    league_filter=league_filter,
-                    confidence_threshold=1,
-                    use_live_scrape=True,
-                )
-            except Exception:
-                pass
+        st.toast("🔄 Auto-refreshing transfer news…", icon="🔄")
+        try:
+            st.session_state.fabrizio.get_transfer_insight(
+                query="latest transfer news today",
+                league_filter=league_filter,
+                confidence_threshold=1,
+                use_live_scrape=True,
+            )
+        except Exception:
+            pass
         st.rerun()
 
 
@@ -523,6 +530,8 @@ if not st.session_state.messages:
         ("🏴󠁧󠁢󠁥󠁮󠁧󠁿", "Premier League news", "Any Premier League deadline day news?"),
         ("🇮🇹", "Serie A signings", "Top Serie A signings this window"),
         ("🇩🇪", "Bundesliga latest", "Bundesliga transfer latest"),
+        ("🇫🇷", "Ligue 1 news", "Ligue 1 transfer news"),
+        ("🇺🇸", "MLS transfers", "Latest MLS transfer news"),
     ]
     cols = st.columns(3)
     for i, (icon, label, query_text) in enumerate(suggestions):

@@ -217,7 +217,7 @@ with st.sidebar:
         default=["All"],
     )
     if st.button("🌐 Scrape Now", use_container_width=True, type="primary"):
-        with st.spinner("Scraping 8 sources…"):
+        with st.spinner("Scraping 11 sources…"):
             try:
                 articles = _scraper.scrape(
                     query=scrape_query or "",
