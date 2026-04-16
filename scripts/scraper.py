@@ -1,10 +1,16 @@
 """
 scraper.py – Transfer news web scraping engine.
-Scrapes 8 trusted football transfer sources concurrently.
+Scrapes 13 sources concurrently, including Fabrizio Romano's own
+Twitter/X feed (via Nitter) and his Caught Offside column.
 
 Each source can declare multiple `urls` — the scraper tries them in order
 and moves on to the next if one returns a 4xx/5xx error.  This makes the
 pipeline resilient to sites that reorganise their URL structure.
+
+Sources with `"type": "nitter"` are parsed differently: instead of
+following article links, tweets are extracted directly from the listing
+page and each tweet becomes an article. Romano's tweets get a +1
+confidence boost because they are primary-source reports.
 """
 import re
 import time
@@ -19,6 +25,31 @@ from bs4 import BeautifulSoup
 # ── Source registry ────────────────────────────────────────────────────────
 # `urls` is tried in order; first successful one wins.
 SOURCES = [
+    # ── PRIMARY SOURCE: Fabrizio Romano himself ──────────────────────────────
+    {
+        "name": "Fabrizio Romano (Twitter/X)",
+        "type": "nitter",           # parsed as tweet listing, not article links
+        "urls": [
+            "https://nitter.privacydev.net/FabrizioRomano",
+            "https://nitter.poast.org/FabrizioRomano",
+            "https://nitter.unixfox.eu/FabrizioRomano",
+            "https://nitter.net/FabrizioRomano",
+            "https://nitter.cz/FabrizioRomano",
+        ],
+        "league_tags": ["All"],
+    },
+    {
+        "name": "Fabrizio Romano (Caught Offside)",
+        "urls": [
+            "https://www.caughtoffside.com/author/fabrizio-romano/",
+            "https://www.caughtoffside.com/category/transfer-news/",
+        ],
+        "article_selector": "a[href*='/20'], h2 a, h3 a",
+        "title_sel": "h1",
+        "body_sel": ".entry-content p, article p",
+        "league_tags": ["All"],
+    },
+    # ── Other trusted sources ─────────────────────────────────────────────
     {
         "name": "BBC Sport Transfers",
         "urls": [
@@ -113,6 +144,42 @@ SOURCES = [
         "body_sel": ".article__text p, article p",
         "league_tags": ["Bundesliga"],
     },
+    {
+        "name": "ESPN Soccer",
+        "urls": [
+            "https://www.espn.com/soccer/transfers",
+            "https://www.espn.com/soccer/news",
+            "https://www.espn.com/soccer/",
+        ],
+        "article_selector": "a[href*='/soccer/story/'], a[href*='/soccer/news/']",
+        "title_sel": "h1",
+        "body_sel": ".article-body p, .story__body p, section p",
+        "league_tags": ["All"],
+    },
+    {
+        "name": "MLS Soccer",
+        "urls": [
+            "https://www.mlssoccer.com/news/transfers",
+            "https://www.mlssoccer.com/news/",
+            "https://www.mlssoccer.com/",
+        ],
+        "article_selector": "a[href*='/news/'], a[href*='/post/']",
+        "title_sel": "h1",
+        "body_sel": ".article-body p, .mls-c-article__body p, article p",
+        "league_tags": ["MLS"],
+    },
+    {
+        "name": "Saudi Pro League News",
+        "urls": [
+            "https://www.arabnews.com/sport/football",
+            "https://www.arabnews.com/taxonomy/term/20929",
+            "https://www.goal.com/en-sa/transfer-news",
+        ],
+        "article_selector": "a[href*='/node/'], a[href*='/en-sa/news/']",
+        "title_sel": "h1",
+        "body_sel": "article p, .article-body p, p",
+        "league_tags": ["Saudi Pro League"],
+    },
 ]
 
 # Expose a simple flat name→url mapping for the UI
@@ -130,7 +197,7 @@ HEADERS = {
 }
 
 REQUEST_TIMEOUT = 6        # seconds per individual HTTP request (fail fast)
-SCRAPE_WALL_TIMEOUT = 20   # total wall-clock budget for the whole scrape run
+SCRAPE_WALL_TIMEOUT = 25   # total wall-clock budget for the whole scrape run
 MAX_ARTICLES_PER_SOURCE = 5
 MAX_SCRAPE_THREADS = 6
 
@@ -211,7 +278,9 @@ class TransferScraper:
             try:
                 resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
                 resp.raise_for_status()
-                # Success — parse and return
+                # Success — use nitter parser for tweet sources, else standard
+                if source.get("type") == "nitter":
+                    return self._parse_nitter(resp, url, source)
                 return self._parse_listing(resp, url, source)
             except requests.HTTPError as e:
                 status = e.response.status_code if e.response is not None else "?"
@@ -225,6 +294,81 @@ class TransferScraper:
         if last_exc:
             raise last_exc
         return []
+
+    # ── Nitter (Twitter/X proxy) parser ───────────────────────────────────
+    def _parse_nitter(
+        self, resp: requests.Response, base_url: str, source: dict
+    ) -> list[dict]:
+        """
+        Extract tweets directly from a Nitter profile page.
+        Each tweet becomes an article; retweets and replies are skipped.
+        Romano's tweets get a +1 confidence boost as primary-source reports.
+        """
+        soup = BeautifulSoup(resp.text, "html.parser")
+        articles: list[dict] = []
+
+        # Nitter renders tweets as .timeline-item divs
+        items = soup.select(".timeline-item, .tweet-body")
+
+        for item in items:
+            if len(articles) >= MAX_ARTICLES_PER_SOURCE:
+                break
+
+            # Skip retweets (they have a .retweet-header element)
+            if item.select_one(".retweet-header"):
+                continue
+
+            # Skip replies (start with "@")
+            content_el = item.select_one(".tweet-content, .tweet-text")
+            if not content_el:
+                continue
+            text = content_el.get_text(separator=" ", strip=True)
+            if not text or len(text) < 30:
+                continue
+            if text.startswith("@"):
+                continue
+
+            # Build URL — convert nitter path to real Twitter URL
+            tweet_link_el = item.select_one("a.tweet-link, a[href*='/status/']")
+            tweet_url = base_url  # fallback
+            if tweet_link_el:
+                href = tweet_link_el.get("href", "")
+                if "/status/" in href:
+                    # e.g. "/FabrizioRomano/status/12345" → twitter.com URL
+                    tweet_url = "https://x.com" + href if href.startswith("/") else href
+
+            # Parse date from the tooltip title on .tweet-date
+            date_str = datetime.date.today().isoformat()
+            date_el = item.select_one(".tweet-date a")
+            if date_el:
+                raw = date_el.get("title", "")  # e.g. "Jan 15, 2025 · 10:32 AM UTC"
+                for fmt in ("%b %d, %Y", "%d/%m/%Y", "%Y-%m-%d"):
+                    try:
+                        date_str = datetime.datetime.strptime(
+                            raw.split("·")[0].strip(), fmt
+                        ).date().isoformat()
+                        break
+                    except ValueError:
+                        continue
+
+            # Confidence: Romano's own words → +1 boost, capped at 5
+            confidence = self._estimate_confidence(text)
+            confidence = min(5, confidence + 1)
+
+            # Use first ~120 chars as title
+            title = text[:120] + ("…" if len(text) > 120 else "")
+
+            articles.append({
+                "title":       title,
+                "text":        text,
+                "source":      source["name"],
+                "url":         tweet_url,
+                "date":        date_str,
+                "league_tags": source.get("league_tags", ["All"]),
+                "confidence":  confidence,
+            })
+
+        return articles
 
     def _parse_listing(
         self, resp: requests.Response, base_url: str, source: dict

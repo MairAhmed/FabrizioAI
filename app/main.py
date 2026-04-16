@@ -50,7 +50,9 @@ LEAGUE_COLORS = {
 }
 
 SOURCE_LEAGUE_MAP = {
-    "ESPN Soccer":           "All",
+    "Fabrizio Romano (Twitter/X)":       "All",
+    "Fabrizio Romano (Caught Offside)":  "All",
+    "ESPN Soccer":                       "All",
     "BBC Sport Transfers":   "All",
     "Goal.com Transfers":    "All",
     "Sky Sports Transfers":  "Premier League",
@@ -364,7 +366,7 @@ st.markdown("""
     <h1>⚽ FabrizioAI</h1>
     <div class="subtitle">
       <span class="live-dot"></span>
-      Transfer Intelligence · Gemini + Live Scraping · 11 Sources
+      Transfer Intelligence · Gemini + Live Scraping · 13 Sources
     </div>
   </div>
 </div>
@@ -484,7 +486,7 @@ with st.sidebar:
 
     st.markdown("""
     <div style="color:#374151;font-size:0.7rem;margin-top:1rem;line-height:1.5;">
-    FabrizioAI aggregates 11 football sources with Gemini reasoning.
+    FabrizioAI aggregates 13 football sources with Gemini reasoning.
     Always verify with official club announcements.
     </div>
     """, unsafe_allow_html=True)
@@ -632,18 +634,4 @@ if query:
         if confidence == 5:
             msg_id = f"confetti_{int(resp_ts)}"
             if msg_id not in st.session_state.confetti_fired:
-                st.session_state.confetti_fired.add(msg_id)
-                fire_confetti()
-                st.success("🎉 HERE WE GO! Deal confirmed!")
-
-    # ── Store message ──────────────────────────────────────────────────────
-    st.session_state.messages.append({
-        "role":       "assistant",
-        "content":    response["answer"],
-        "sources":    response.get("sources", []),
-        "confidence": confidence,
-        "ts":         resp_ts,
-    })
-
-    # Trigger a cheap rerun so the auto-refresh countdown stays live
-    time.sleep(0.05)
+                st.session_state.confetti_

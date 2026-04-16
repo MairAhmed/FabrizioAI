@@ -54,7 +54,9 @@ LEAGUE_COLORS = {
 }
 
 SOURCE_LEAGUE_MAP = {
-    "ESPN Soccer":           "All",
+    "Fabrizio Romano (Twitter/X)":       "All",
+    "Fabrizio Romano (Caught Offside)":  "All",
+    "ESPN Soccer":                       "All",
     "BBC Sport Transfers":   "All",
     "Goal.com Transfers":    "All",
     "Sky Sports Transfers":  "Premier League",

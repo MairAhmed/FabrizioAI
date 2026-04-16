@@ -58,14 +58,19 @@ CONF_LABELS = {
 }
 
 SOURCE_LEAGUE_MAP = {
-    "BBC Sport Transfers":  "All",
-    "Goal.com Transfers":   "All",
-    "Sky Sports Transfers": "Premier League",
-    "Transfermarkt News":   "All",
-    "Calciomercato":        "Serie A",
-    "Marca Transfers":      "La Liga",
-    "L'Equipe Football":    "Ligue 1",
-    "Kicker Transfers":     "Bundesliga",
+    "Fabrizio Romano (Twitter/X)":       "All",
+    "Fabrizio Romano (Caught Offside)":  "All",
+    "ESPN Soccer":           "All",
+    "BBC Sport Transfers":   "All",
+    "Goal.com Transfers":    "All",
+    "Sky Sports Transfers":  "Premier League",
+    "Transfermarkt News":    "All",
+    "Calciomercato":         "Serie A",
+    "Marca Transfers":       "La Liga",
+    "L'Equipe Football":     "Ligue 1",
+    "Kicker Transfers":      "Bundesliga",
+    "MLS Soccer":            "MLS",
+    "Saudi Pro League News": "Saudi Pro League",
 }
 
 # ── CSS ───────────────────────────────────────────────────────────────────
@@ -217,7 +222,7 @@ with st.sidebar:
         default=["All"],
     )
     if st.button("🌐 Scrape Now", use_container_width=True, type="primary"):
-        with st.spinner("Scraping 11 sources…"):
+        with st.spinner("Scraping 13 sources…"):
             try:
                 articles = _scraper.scrape(
                     query=scrape_query or "",
@@ -322,7 +327,7 @@ else:
                     style="background:{pal['bg']};color:{pal['text']};border-color:{pal['border']};">
                     {league}
                   </span>
-                  <div class="card-body">{body}…</div>
+                    <div class="card-body">{body}…</div>
                   <div class="card-meta">
                     📡 <a class="source-link" href="{url}" target="_blank">{src}</a>
                     &nbsp;·&nbsp; 📅 {date}

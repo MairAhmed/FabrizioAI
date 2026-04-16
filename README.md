@@ -52,10 +52,12 @@ FabrizioAI/
 
 ## 📡 Data Sources
 
-The scraper pulls from 11 trusted football sources concurrently. Each source has multiple fallback URLs so a site restructure never breaks the pipeline.
+The scraper pulls from 13 trusted football sources concurrently. Each source has multiple fallback URLs so a site restructure never breaks the pipeline.
 
 | Source | League Focus |
 |--------|-------------|
+| **Fabrizio Romano (Twitter/X)** | All — primary source ⭐ |
+| **Fabrizio Romano (Caught Offside)** | All — primary source ⭐ |
 | ESPN Soccer | All |
 | BBC Sport Transfers | All |
 | Goal.com Transfers | All |
@@ -278,4 +280,4 @@ MIT License — do whatever you want with it.
 
 ---
 
-*Built by [Mair Ahmed](https://github.com/MairAhmed)*
+*Built by [Mair Ahmed](https://github.com/Mai
