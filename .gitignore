@@ -1,0 +1,26 @@
+git init
+```
+
+**2. Create a `.gitignore` first** — super important so you don't accidentally push your API key:
+```
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# ChromaDB local vector store
+.chroma_db/
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db

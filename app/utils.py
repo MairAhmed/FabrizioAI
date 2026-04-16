@@ -1,16 +1,19 @@
 """
-utils.py – FabrizioAI LangGraph Agent
+utils.py – FabrizioAI LangGraph Agent + Predictor
 A proper agentic graph where Gemini decides what tools to call,
 can loop to gather more info, and reasons before responding.
 
 Graph flow:
   START → agent (Gemini decides) → [tools | END]
   tools → agent (Gemini reasons over results) → [tools | END]
+
+Also exports FabrizioPredictor for the Predictor page.
 """
 import os
 import sys
 import json
 import re
+import time
 from pathlib import Path
 from typing import Annotated, TypedDict, Literal
 
@@ -70,7 +73,17 @@ def scrape_transfer_news(query: str, leagues: str = "All") -> str:
         JSON string with scraped articles.
     """
     league_list = [l.strip() for l in leagues.split(",")] if leagues != "All" else ["All"]
-    articles = _scraper.scrape(query=query, league_filter=league_list)
+    try:
+        articles = _scraper.scrape(query=query, league_filter=league_list)
+    except Exception as scrape_err:
+        # Never let a scraper crash bubble up as an agent error —
+        # return an empty-but-valid payload so Gemini can still answer from KB.
+        print(f"[scrape_transfer_news tool] Scraper raised: {scrape_err}")
+        return json.dumps({
+            "status": "scrape_error",
+            "message": str(scrape_err),
+            "articles": [],
+        })
 
     if not articles:
         return json.dumps({"status": "no_results", "articles": []})
@@ -367,3 +380,243 @@ class FabrizioAI:
             "confidence": 3,
             "confidence_label": CONFIDENCE_LABELS[3],
         }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# FabrizioPredictor — Football predictions powered by Gemini + KB context
+# ══════════════════════════════════════════════════════════════════════════
+
+PREDICTOR_SYSTEM_PROMPT = """
+You are FabrizioAI's Prediction Engine — a world-class football analytics model that makes
+data-driven predictions about match outcomes, league/tournament champions, and transfer window moves.
+
+When predicting, you MUST respond with valid JSON wrapped in ```json ... ```.
+
+Your predictions should feel like a blend of Opta stats, insider knowledge, and transfer expertise.
+Always be confident but honest about uncertainty. Use % probabilities that sum correctly.
+Cite specific factors: form, squad depth, injuries, transfers, recent results, manager, home/away.
+
+Base your predictions on:
+1. Any recent news context provided (scraped articles)
+2. Your deep knowledge of club strengths, player quality, league dynamics, and historical patterns
+3. Current season context (transfers made, manager changes, injuries)
+"""
+
+MATCH_PREDICT_PROMPT = """
+Predict the outcome of this football match:
+Team A: {team_a}
+Team B: {team_b}
+Competition: {competition}
+Context (recent news): {context}
+
+Respond with this exact JSON:
+```json
+{{
+  "home_team": "{team_a}",
+  "away_team": "{team_b}",
+  "prediction": "HOME_WIN | DRAW | AWAY_WIN",
+  "home_win_pct": <0-100>,
+  "draw_pct": <0-100>,
+  "away_win_pct": <0-100>,
+  "predicted_score": "X - X",
+  "key_factors": ["factor 1", "factor 2", "factor 3", "factor 4"],
+  "form_home": "W W D L W",
+  "form_away": "W L W W D",
+  "confidence": <1-5>,
+  "analysis": "<2-3 sentences of expert analysis>"
+}}
+```
+Note: home_win_pct + draw_pct + away_win_pct MUST equal 100.
+"""
+
+LEAGUE_PREDICT_PROMPT = """
+Predict the winner/champion of:
+Competition: {competition}
+Season: {season}
+Context (recent news): {context}
+
+Respond with this exact JSON:
+```json
+{{
+  "competition": "{competition}",
+  "season": "{season}",
+  "predictions": [
+    {{"rank": 1, "team": "Team Name", "probability_pct": 35, "reasoning": "why they win it"}},
+    {{"rank": 2, "team": "Team Name", "probability_pct": 25, "reasoning": "strong contender because..."}},
+    {{"rank": 3, "team": "Team Name", "probability_pct": 18, "reasoning": "dark horse because..."}},
+    {{"rank": 4, "team": "Team Name", "probability_pct": 12, "reasoning": "outside chance if..."}},
+    {{"rank": 5, "team": "Team Name", "probability_pct": 10, "reasoning": "possible but unlikely..."}}
+  ],
+  "key_storylines": ["storyline 1", "storyline 2", "storyline 3"],
+  "dark_horse": "Team most likely to surprise",
+  "analysis": "<3-4 sentences of expert competition analysis>"
+}}
+```
+"""
+
+TRANSFER_PREDICT_PROMPT = """
+Predict the most likely transfers in the upcoming {window} transfer window.
+Focus leagues: {leagues}
+Player/Club focus: {focus}
+Context (recent news & rumours): {context}
+
+Respond with this exact JSON:
+```json
+{{
+  "window": "{window}",
+  "predictions": [
+    {{
+      "rank": 1,
+      "player": "Player Name",
+      "from_club": "Current Club",
+      "to_club": "Destination Club",
+      "fee_estimate": "€Xm / Free / Loan",
+      "likelihood_pct": 85,
+      "reasoning": "why this move happens",
+      "status": "Rumour | Talks | Likely | Almost Certain"
+    }}
+  ],
+  "biggest_surprise": "A transfer nobody is talking about yet but could happen",
+  "window_themes": ["theme 1 (e.g. Big clubs spending big)", "theme 2", "theme 3"],
+  "analysis": "<2-3 sentences summarising the window outlook>"
+}}
+```
+Include exactly 8 transfer predictions ranked by likelihood.
+"""
+
+
+class FabrizioPredictor:
+    """
+    Gemini-powered football prediction engine.
+    Uses KB context (scraped articles) to ground predictions in current news.
+    """
+
+    def __init__(self, model_name: str = "gemini-2.5-flash"):
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        self._llm = ChatGoogleGenerativeAI(
+            model=model_name,
+            google_api_key=api_key,
+            temperature=0.4,
+            convert_system_message_to_human=True,
+        )
+        self._processor = TransferProcessor()
+
+    # ── Public prediction methods ──────────────────────────────────────────
+
+    def predict_match(
+        self, team_a: str, team_b: str, competition: str = "Unknown"
+    ) -> dict:
+        """Predict the outcome of a head-to-head match."""
+        context = self._get_context(f"{team_a} {team_b} {competition}")
+        prompt = MATCH_PREDICT_PROMPT.format(
+            team_a=team_a, team_b=team_b,
+            competition=competition, context=context,
+        )
+        raw = self._call_gemini(prompt)
+        return self._parse_json(raw, default={
+            "home_team": team_a, "away_team": team_b,
+            "prediction": "DRAW", "home_win_pct": 35,
+            "draw_pct": 30, "away_win_pct": 35,
+            "predicted_score": "1 - 1",
+            "key_factors": ["Insufficient data"],
+            "form_home": "? ? ? ? ?", "form_away": "? ? ? ? ?",
+            "confidence": 2,
+            "analysis": "Not enough current data to make a confident prediction.",
+        })
+
+    def predict_league(self, competition: str, season: str = "2025/26") -> dict:
+        """Predict the champion and top contenders for a competition."""
+        context = self._get_context(f"{competition} title race champion winner")
+        prompt = LEAGUE_PREDICT_PROMPT.format(
+            competition=competition, season=season, context=context,
+        )
+        raw = self._call_gemini(prompt)
+        return self._parse_json(raw, default={
+            "competition": competition, "season": season,
+            "predictions": [{"rank": 1, "team": "Unknown", "probability_pct": 100, "reasoning": "No data"}],
+            "key_storylines": [],
+            "dark_horse": "Unknown",
+            "analysis": "Insufficient data.",
+        })
+
+    def predict_transfers(
+        self,
+        window: str = "Summer",
+        leagues: str = "All",
+        focus: str = "",
+    ) -> dict:
+        """Predict the most likely transfers in the next window."""
+        context = self._get_context(
+            f"transfer rumours negotiations {focus} {leagues} {window} window"
+        )
+        prompt = TRANSFER_PREDICT_PROMPT.format(
+            window=window, leagues=leagues,
+            focus=focus or "all top clubs",
+            context=context,
+        )
+        raw = self._call_gemini(prompt)
+        return self._parse_json(raw, default={
+            "window": window,
+            "predictions": [],
+            "biggest_surprise": "Unknown",
+            "window_themes": [],
+            "analysis": "Insufficient data.",
+        })
+
+    # ── Internal helpers ───────────────────────────────────────────────────
+
+    def _get_context(self, query: str, top_k: int = 8) -> str:
+        """Pull relevant KB articles and format them as context text."""
+        chunks = self._processor.retrieve(query=query, top_k=top_k)
+        if not chunks:
+            return "No recent articles available — using general football knowledge."
+        parts = []
+        for c in chunks:
+            parts.append(
+                f"[{c.get('source', 'Unknown')} | conf:{c.get('confidence', 1)}] "
+                f"{c.get('title', '')} — {c.get('text', '')[:300]}"
+            )
+        return "\n\n".join(parts)
+
+    def _call_gemini(self, user_prompt: str) -> str:
+        """Send prompt to Gemini with retry on rate-limit."""
+        messages = [
+            SystemMessage(content=PREDICTOR_SYSTEM_PROMPT),
+            HumanMessage(content=user_prompt),
+        ]
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                response = self._llm.invoke(messages)
+                content = response.content
+                if isinstance(content, list):
+                    content = " ".join(
+                        p.get("text", "") if isinstance(p, dict) else str(p)
+                        for p in content
+                    )
+                return str(content)
+            except Exception as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    if attempt < max_retries - 1:
+                        time.sleep(10)
+                    else:
+                        raise RuntimeError("Gemini quota exhausted. Try again later.")
+                else:
+                    raise
+
+    @staticmethod
+    def _parse_json(raw: str, default: dict) -> dict:
+        """Extract JSON from Gemini's response."""
+        match = re.search(r"```json\s*(.*?)\s*```", raw, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+        # Try raw JSON without fences
+        try:
+            start = raw.index("{")
+            return json.loads(raw[start:])
+        except (ValueError, json.JSONDecodeError):
+            pass
+        return default
