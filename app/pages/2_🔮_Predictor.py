@@ -66,8 +66,24 @@ LIGUE_1 = [
     "Nantes", "Nice", "Paris Saint-Germain", "Reims", "Rennes",
     "Saint-Etienne", "Strasbourg", "Toulouse",
 ]
+MLS = [
+    "Atlanta United", "Austin FC", "Charlotte FC", "Chicago Fire",
+    "Colorado Rapids", "Columbus Crew", "D.C. United", "FC Cincinnati",
+    "FC Dallas", "Houston Dynamo", "Inter Miami CF", "LA Galaxy",
+    "LAFC", "Minnesota United", "Nashville SC", "New England Revolution",
+    "New York City FC", "New York Red Bulls", "Orlando City",
+    "Philadelphia Union", "Portland Timbers", "Real Salt Lake",
+    "San Jose Earthquakes", "Seattle Sounders", "Sporting Kansas City",
+    "St. Louis City SC", "Toronto FC", "Vancouver Whitecaps",
+]
+SAUDI_PRO_LEAGUE = [
+    "Al-Ahli", "Al-Fayha", "Al-Fateh", "Al-Hazm", "Al-Hilal",
+    "Al-Ittihad", "Al-Nassr", "Al-Qadsiah", "Al-Shabab", "Al-Taawoun",
+    "Al-Wehda", "Al-Ettifaq", "Damac FC", "Al-Khaleej",
+]
 ALL_CLUBS = sorted(set(
-    PREMIER_LEAGUE + LA_LIGA + SERIE_A + BUNDESLIGA + LIGUE_1 + [
+    PREMIER_LEAGUE + LA_LIGA + SERIE_A + BUNDESLIGA + LIGUE_1 +
+    MLS + SAUDI_PRO_LEAGUE + [
         "Ajax", "Benfica", "Porto", "Sporting CP", "Celtic",
         "Rangers", "Galatasaray", "Fenerbahce", "PSV Eindhoven",
         "Club Brugge", "Red Bull Salzburg", "Shakhtar Donetsk",
@@ -76,19 +92,23 @@ ALL_CLUBS = sorted(set(
 
 COMPETITIONS = [
     "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1",
+    "MLS", "Saudi Pro League",
     "UEFA Champions League", "UEFA Europa League", "UEFA Conference League",
     "FA Cup", "Copa del Rey", "Coppa Italia", "DFB-Pokal",
+    "Leagues Cup", "US Open Cup",
     "FIFA Club World Cup",
 ]
 
 LEAGUE_COLORS = {
-    "Premier League": "#6a2e9e",
-    "La Liga": "#dc2626",
-    "Serie A": "#2563eb",
-    "Bundesliga": "#ca8a04",
-    "Ligue 1": "#0369a1",
+    "Premier League":   "#6a2e9e",
+    "La Liga":          "#dc2626",
+    "Serie A":          "#2563eb",
+    "Bundesliga":       "#ca8a04",
+    "Ligue 1":          "#0369a1",
+    "MLS":              "#1a56a0",
+    "Saudi Pro League": "#00a651",
     "Champions League": "#1d4ed8",
-    "Default": "#e94560",
+    "Default":          "#e94560",
 }
 
 # ── CSS ───────────────────────────────────────────────────────────────────
@@ -521,7 +541,7 @@ with tab_transfer:
     with col_l:
         tw_leagues = st.multiselect(
             "Focus Leagues",
-            ["All", "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1"],
+            ["All", "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1", "MLS", "Saudi Pro League"],
             default=["All"],
         )
     with col_f:

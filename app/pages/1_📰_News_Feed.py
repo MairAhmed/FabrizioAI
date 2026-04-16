@@ -200,7 +200,7 @@ with st.sidebar:
 
     league_filter = st.multiselect(
         "Leagues",
-        ["All", "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1"],
+        ["All", "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1", "MLS", "Saudi Pro League"],
         default=["All"],
     )
     min_conf = st.slider("Min. confidence", 1, 5, 1,
@@ -213,7 +213,7 @@ with st.sidebar:
     scrape_query = st.text_input("Topic to scrape (optional)", placeholder="e.g. Arsenal striker")
     scrape_leagues = st.multiselect(
         "Leagues to scrape",
-        ["All", "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1"],
+        ["All", "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1", "MLS", "Saudi Pro League"],
         default=["All"],
     )
     if st.button("🌐 Scrape Now", use_container_width=True, type="primary"):

@@ -52,10 +52,11 @@ FabrizioAI/
 
 ## 📡 Data Sources
 
-The scraper pulls from 8 trusted football sources concurrently. Each source has multiple fallback URLs so a site restructure never breaks the pipeline.
+The scraper pulls from 11 trusted football sources concurrently. Each source has multiple fallback URLs so a site restructure never breaks the pipeline.
 
 | Source | League Focus |
 |--------|-------------|
+| ESPN Soccer | All |
 | BBC Sport Transfers | All |
 | Goal.com Transfers | All |
 | Sky Sports Transfers | Premier League |
@@ -64,6 +65,8 @@ The scraper pulls from 8 trusted football sources concurrently. Each source has 
 | Marca | La Liga |
 | L'Equipe | Ligue 1 |
 | Kicker | Bundesliga |
+| MLS Soccer | MLS |
+| Saudi Pro League News | Saudi Pro League |
 
 ---
 
