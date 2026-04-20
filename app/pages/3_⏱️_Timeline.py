@@ -6,6 +6,7 @@ then displays them as player movement cards grouped by date.
 """
 
 import sys
+import re
 import json
 import datetime as dt
 from pathlib import Path
@@ -106,12 +107,13 @@ Return ONLY a JSON array. If no transfer moves found, return [].
 No explanation text — just the JSON array."""
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def extract_transfers_with_gemini(articles_json: str) -> list[dict]:
+@st.cache_data(ttl=600, show_spinner=False)
+def extract_transfers_with_gemini(articles_json: str) -> tuple[list[dict], str]:
     """
-    Send article headlines to Gemini for structured transfer extraction.
-    Cached for 5 minutes to avoid re-calling on every Streamlit rerun.
-    articles_json is a JSON string of [{index, title, text, url, source, date, confidence}]
+    Send article headlines to Gemini (gemini-1.5-flash, 1500 RPD free tier) for
+    structured transfer extraction. Returns (results, mode) where mode is
+    "gemini" on success or "quota_exceeded" / "error" on failure.
+    Cached 10 minutes to minimise API calls.
     """
     import os
     from dotenv import load_dotenv
@@ -119,51 +121,109 @@ def extract_transfers_with_gemini(articles_json: str) -> list[dict]:
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        return []
+        return [], "no_key"
 
-    try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        from langchain_core.messages import HumanMessage, SystemMessage
+    articles = json.loads(articles_json)
+    if not articles:
+        return [], "gemini"
 
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=api_key,
-            temperature=0.1,
+    # Build numbered article list
+    lines = []
+    for a in articles:
+        lines.append(
+            f"{a['index']}. [{a['source']} | {a['date']} | conf:{a['confidence']}]\n"
+            f"   Headline: {a['title']}\n"
+            f"   Snippet:  {a['text'][:200]}"
         )
+    articles_text = "\n\n".join(lines)
 
-        articles = json.loads(articles_json)
-        if not articles:
-            return []
+    # Try gemini-1.5-flash first (1500 RPD free tier), fall back to gemini-2.0-flash
+    for model_name in ["gemini-1.5-flash", "gemini-2.0-flash"]:
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            from langchain_core.messages import HumanMessage, SystemMessage
 
-        # Build numbered article list
-        lines = []
-        for a in articles:
-            lines.append(
-                f"{a['index']}. [{a['source']} | {a['date']} | conf:{a['confidence']}]\n"
-                f"   Headline: {a['title']}\n"
-                f"   Snippet:  {a['text'][:200]}"
+            llm = ChatGoogleGenerativeAI(
+                model=model_name,
+                google_api_key=api_key,
+                temperature=0.1,
             )
-        articles_text = "\n\n".join(lines)
+            response = llm.invoke([
+                SystemMessage(content=_EXTRACTION_PROMPT),
+                HumanMessage(content=f"Extract transfer moves from these {len(articles)} articles:\n\n{articles_text}"),
+            ])
+            raw = response.content.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+            parsed = json.loads(raw)
+            return (parsed if isinstance(parsed, list) else []), "gemini"
 
-        response = llm.invoke([
-            SystemMessage(content=_EXTRACTION_PROMPT),
-            HumanMessage(content=f"Extract transfer moves from these {len(articles)} articles:\n\n{articles_text}"),
-        ])
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
+                continue  # try next model
+            # Non-quota error — bail out
+            return [], f"error:{err_str[:120]}"
 
-        raw = response.content.strip()
-        # Strip markdown code fences if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
+    # All models quota-exhausted
+    return [], "quota_exceeded"
 
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, list) else []
 
-    except Exception as e:
-        st.session_state["_gemini_tl_error"] = str(e)
-        return []
+# ── Regex fallback parser (used when Gemini quota is exhausted) ───────────
+_TRANSFER_VERBS = re.compile(
+    r'\b(joins?|signs?|moves?\s+to|transfers?\s+to|heading\s+to|'
+    r'completes?\s+move|agrees?\s+to\s+join|confirmed\s+at|'
+    r'leaves?|departs?|exits?|set\s+to\s+leave|linked\s+to|'
+    r'targets?|eyes?|wants?\s+to\s+sign|bids?\s+for|'
+    r'nearing\s+(?:a\s+)?(?:move|deal|transfer))\b',
+    re.IGNORECASE,
+)
+
+def _clean(s: str) -> str:
+    return re.sub(r'\s+', ' ', s).strip().rstrip(".,!;:")
+
+def _regex_parse(title: str, idx: int) -> dict | None:
+    """Quick regex check — only pass articles that mention transfer verbs."""
+    if not _TRANSFER_VERBS.search(title):
+        return None
+    # Pattern A: Player → Club
+    m = re.match(
+        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})'
+        r'\s+(?:to|joins?|signs?\s+for|moves?\s+to|heading\s+to|'
+        r'completes?\s+move\s+to|agrees?\s+to\s+join|confirmed\s+at)\s+'
+        r'([A-Z][A-Za-záéíóú\s\.\-\']+?)(?:\s*[,!;:\-]|\s+(?:on|for|in|at)\b|$)',
+        title, re.IGNORECASE,
+    )
+    if m:
+        return {"article_index": idx, "player": _clean(m.group(1)),
+                "to_club": _clean(m.group(2)), "from_club": None,
+                "direction": "joining", "league": "All"}
+    # Pattern B: Club signs Player
+    m = re.match(
+        r'([A-Z][A-Za-záéíóú\s\.\-\']{3,35}?)\s+'
+        r'(?:sign|signs|complete|completes|confirm|confirms|land|lands|secure|secures)\s+'
+        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})',
+        title,
+    )
+    if m:
+        return {"article_index": idx, "player": _clean(m.group(2)),
+                "to_club": _clean(m.group(1)), "from_club": None,
+                "direction": "joining", "league": "All"}
+    # Pattern C: Player leaves Club
+    m = re.match(
+        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})'
+        r'\s+(?:leaves?|departs?|exits?|set\s+to\s+leave|will\s+leave)'
+        r'(?:\s+([A-Z][A-Za-záéíóú\s\.\-\']+?)(?:\s*[,;:\-]|$))?',
+        title, re.IGNORECASE,
+    )
+    if m:
+        return {"article_index": idx, "player": _clean(m.group(1)),
+                "from_club": _clean(m.group(2)) if m.group(2) else None,
+                "to_club": None, "direction": "leaving", "league": "All"}
+    return None
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────
@@ -316,7 +376,7 @@ st.markdown("""
 st.markdown("""
 <div class="tl-header">
   <h1>⏱️ Transfer Timeline</h1>
-  <div class="sub">Gemini-powered · Strictly transfer moves · Grouped by date</div>
+  <div class="sub">AI-powered · Strictly transfer moves · Grouped by date</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -346,10 +406,18 @@ with st.sidebar:
 
     st.divider()
 
-    if st.button("🔄 Re-extract transfers", use_container_width=True,
-                 help="Force Gemini to re-analyse the KB articles"):
+    st.markdown("### 🤖 AI Extraction")
+    if st.button("🔍 Extract Transfers (AI)", use_container_width=True, type="primary",
+                 help="Ask Gemini to identify transfer moves in the KB articles. Uses gemini-1.5-flash (1500/day free)."):
+        st.session_state["tl_run_gemini"] = True
         st.cache_data.clear()
         st.rerun()
+    if st.button("🔄 Re-extract (force refresh)", use_container_width=True,
+                 help="Clear cache and re-run Gemini extraction"):
+        st.session_state["tl_run_gemini"] = True
+        st.cache_data.clear()
+        st.rerun()
+    st.caption("Uses gemini-1.5-flash · 1,500 free calls/day")
 
     st.divider()
     stats = _processor.stats()
@@ -447,13 +515,52 @@ articles_payload = json.dumps([
     for i, a in indexed.items()
 ])
 
-with st.spinner(f"🤖 Gemini extracting transfer moves from {len(kb_articles_raw)} articles…"):
-    extracted = extract_transfers_with_gemini(articles_payload)
+# ── Extraction: Gemini (on demand) or regex fallback ──────────────────────
+extraction_mode = "none"
 
-# Show Gemini error if any (non-blocking)
-if "_gemini_tl_error" in st.session_state:
-    err = st.session_state.pop("_gemini_tl_error")
-    st.warning(f"⚠️ Gemini extraction error: `{err}`. Check your API key.", icon="⚠️")
+run_gemini = st.session_state.get("tl_run_gemini", False)
+
+if run_gemini:
+    with st.spinner(f"🤖 Gemini (gemini-1.5-flash) extracting from {len(kb_articles_raw)} articles…"):
+        extracted, extraction_mode = extract_transfers_with_gemini(articles_payload)
+
+    if extraction_mode == "quota_exceeded":
+        st.warning(
+            "⚠️ **Gemini quota reached** for today (free tier: 1,500/day on gemini-1.5-flash). "
+            "Showing **regex-based** results instead — less accurate but still useful. "
+            "Quota resets at midnight PT.",
+            icon="⚠️",
+        )
+        extraction_mode = "regex"
+    elif extraction_mode.startswith("error:"):
+        st.warning(f"⚠️ Gemini error: `{extraction_mode[6:]}` — falling back to regex.", icon="⚠️")
+        extraction_mode = "regex"
+    elif extraction_mode == "no_key":
+        st.error("🔑 No GEMINI_API_KEY found in .env — using regex fallback.", icon="🔑")
+        extraction_mode = "regex"
+    else:
+        st.session_state["tl_run_gemini"] = False  # reset so next load doesn't auto-re-run
+
+    if extraction_mode == "regex":
+        extracted = [
+            r for r in (
+                _regex_parse(indexed[i].get("title", ""), i)
+                for i in indexed
+            ) if r is not None
+        ]
+else:
+    # Not yet run — show prompt to use the button
+    extracted = []
+    extraction_mode = "none"
+
+if extraction_mode == "none" and not run_gemini:
+    st.info(
+        "👆 Click **Extract Transfers (AI)** in the sidebar to identify transfer moves "
+        "using Gemini. Results are cached for 10 minutes.",
+        icon="🤖",
+    )
+elif extraction_mode == "regex":
+    st.caption("📐 Showing regex-extracted results (Gemini quota exceeded)")
 
 
 # ── Build enriched move list ───────────────────────────────────────────────
