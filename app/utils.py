@@ -488,9 +488,12 @@ Player/Club focus: {focus}
 KB context (scraped articles — these contain REAL current rumours and confirmed moves):
 {context}
 
-CRITICAL: Only predict moves that are supported by or consistent with the articles above.
-Do NOT predict moves for players who are already confirmed at a new club in the articles.
-If an article says "Player X joined Club Y", do NOT predict them moving elsewhere.
+CRITICAL RULES — follow every one of these:
+1. Only predict moves supported by or consistent with the articles above.
+2. Do NOT predict moves for players already confirmed at a new club in the articles.
+3. EVERY prediction MUST have a real, named player — no "Undisclosed Striker", "Unknown Forward", position titles, or placeholder names. If you don't know a specific player name, skip that slot entirely.
+4. EVERY prediction MUST have a real, named club for both from_club and to_club — no "Undisclosed Club", "Top European Club", "Unnamed Club", etc. If you don't know the destination, skip that slot.
+5. Do NOT infer squad needs (e.g. "Liverpool need a striker because Ekitike is injured") and invent a fake transfer to fill that need. Only predict moves actually mentioned or strongly implied in the articles.
 
 Respond with this exact JSON:
 ```json
