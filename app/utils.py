@@ -10,6 +10,7 @@ Graph flow:
 Also exports FabrizioPredictor for the Predictor page.
 """
 import os
+import datetime
 import sys
 import json
 import re
@@ -387,27 +388,44 @@ class FabrizioAI:
 # ══════════════════════════════════════════════════════════════════════════
 
 PREDICTOR_SYSTEM_PROMPT = """
-You are FabrizioAI's Prediction Engine — a world-class football analytics model that makes
-data-driven predictions about match outcomes, league/tournament champions, and transfer window moves.
+You are FabrizioAI's Prediction Engine — a football analytics model that makes
+data-driven predictions grounded in LIVE scraped news.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  CRITICAL RULES — FOLLOW EXACTLY OR YOUR ANSWER IS WRONG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. ALL current-season facts MUST come exclusively from the KB context articles supplied in the prompt.
+   - Squad composition: use ONLY what the articles say. Players move.
+   - League standings / points / positions: use ONLY figures from the articles.
+   - Champions League / cup status: use ONLY what the articles confirm.
+2. Your training data is OUTDATED. Never use it to assert current season facts.
+   If something is not in the articles, say you don't have current data on it.
+3. Do NOT assume a player is still at their "previous well-known club".
+   Example: if an article says "Olise at Bayern" treat him as a Bayern player.
+4. Do NOT invent standings or results. If the KB has no current table, say so.
+5. If the KB context is empty or sparse: lower your confidence score (1-2),
+   flag that fresh data is needed, and say predictions are based on limited info.
+
+What you MAY use background knowledge for (non-current-season only):
+- General football rules, historical records, typical player roles
+- Club histories (NOT current season specifics)
+- Transfer market dynamics in general
 
 When predicting, you MUST respond with valid JSON wrapped in ```json ... ```.
-
-Your predictions should feel like a blend of Opta stats, insider knowledge, and transfer expertise.
-Always be confident but honest about uncertainty. Use % probabilities that sum correctly.
-Cite specific factors: form, squad depth, injuries, transfers, recent results, manager, home/away.
-
-Base your predictions on:
-1. Any recent news context provided (scraped articles)
-2. Your deep knowledge of club strengths, player quality, league dynamics, and historical patterns
-3. Current season context (transfers made, manager changes, injuries)
+Use % probabilities that sum to 100. Be honest about uncertainty.
 """
 
 MATCH_PREDICT_PROMPT = """
+Today's date: {today}
 Predict the outcome of this football match:
 Team A: {team_a}
 Team B: {team_b}
 Competition: {competition}
-Context (recent news): {context}
+
+KB context (scraped articles — trust this over your training data):
+{context}
+
+IMPORTANT: Base form, injuries and squad facts ONLY on the articles above.
 
 Respond with this exact JSON:
 ```json
@@ -430,10 +448,17 @@ Note: home_win_pct + draw_pct + away_win_pct MUST equal 100.
 """
 
 LEAGUE_PREDICT_PROMPT = """
+Today's date: {today}
 Predict the winner/champion of:
 Competition: {competition}
 Season: {season}
-Context (recent news): {context}
+
+KB context (scraped articles — these reflect the CURRENT state of the competition):
+{context}
+
+CRITICAL: Use ONLY standings, results and squad info from the articles above.
+If the articles show a team is knocked out or trailing badly, reflect that.
+Do NOT contradict what the articles say with your training data assumptions.
 
 Respond with this exact JSON:
 ```json
@@ -455,10 +480,17 @@ Respond with this exact JSON:
 """
 
 TRANSFER_PREDICT_PROMPT = """
+Today's date: {today}
 Predict the most likely transfers in the upcoming {window} transfer window.
 Focus leagues: {leagues}
 Player/Club focus: {focus}
-Context (recent news & rumours): {context}
+
+KB context (scraped articles — these contain REAL current rumours and confirmed moves):
+{context}
+
+CRITICAL: Only predict moves that are supported by or consistent with the articles above.
+Do NOT predict moves for players who are already confirmed at a new club in the articles.
+If an article says "Player X joined Club Y", do NOT predict them moving elsewhere.
 
 Respond with this exact JSON:
 ```json
@@ -507,10 +539,11 @@ class FabrizioPredictor:
         self, team_a: str, team_b: str, competition: str = "Unknown"
     ) -> dict:
         """Predict the outcome of a head-to-head match."""
-        context = self._get_context(f"{team_a} {team_b} {competition}")
+        context = self._get_context(f"{team_a} {team_b} {competition}", top_k=12)
         prompt = MATCH_PREDICT_PROMPT.format(
             team_a=team_a, team_b=team_b,
             competition=competition, context=context,
+            today=datetime.date.today().isoformat(),
         )
         raw = self._call_gemini(prompt)
         return self._parse_json(raw, default={
@@ -526,9 +559,13 @@ class FabrizioPredictor:
 
     def predict_league(self, competition: str, season: str = "2025/26") -> dict:
         """Predict the champion and top contenders for a competition."""
-        context = self._get_context(f"{competition} title race champion winner")
+        context = self._get_context(
+            f"{competition} title race standings points leader winner champion",
+            top_k=15,
+        )
         prompt = LEAGUE_PREDICT_PROMPT.format(
             competition=competition, season=season, context=context,
+            today=datetime.date.today().isoformat(),
         )
         raw = self._call_gemini(prompt)
         return self._parse_json(raw, default={
@@ -547,12 +584,14 @@ class FabrizioPredictor:
     ) -> dict:
         """Predict the most likely transfers in the next window."""
         context = self._get_context(
-            f"transfer rumours negotiations {focus} {leagues} {window} window"
+            f"transfer rumours negotiations signing joined confirmed {focus} {leagues} {window} window",
+            top_k=20,
         )
         prompt = TRANSFER_PREDICT_PROMPT.format(
             window=window, leagues=leagues,
             focus=focus or "all top clubs",
             context=context,
+            today=datetime.date.today().isoformat(),
         )
         raw = self._call_gemini(prompt)
         return self._parse_json(raw, default={
@@ -569,14 +608,19 @@ class FabrizioPredictor:
         """Pull relevant KB articles and format them as context text."""
         chunks = self._processor.retrieve(query=query, top_k=top_k)
         if not chunks:
-            return "No recent articles available — using general football knowledge."
+            return (
+                "⚠️ NO KB ARTICLES FOUND. The knowledge base is empty or has no relevant articles. "
+                "Predictions below have LOW accuracy — please scrape fresh data first."
+            )
         parts = []
         for c in chunks:
             parts.append(
-                f"[{c.get('source', 'Unknown')} | conf:{c.get('confidence', 1)}] "
-                f"{c.get('title', '')} — {c.get('text', '')[:300]}"
+                f"[SOURCE: {c.get('source', 'Unknown')} | DATE: {c.get('date', 'unknown')} | "
+                f"CONFIDENCE: {c.get('confidence', 1)}/5]\n"
+                f"HEADLINE: {c.get('title', '')}\n"
+                f"CONTENT: {c.get('text', '')[:400]}"
             )
-        return "\n\n".join(parts)
+        return f"({len(chunks)} articles)\n\n" + "\n\n---\n\n".join(parts)
 
     def _call_gemini(self, user_prompt: str) -> str:
         """Send prompt to Gemini with retry on rate-limit."""
