@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))               # app
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))  # scripts/
 
 from utils import FabrizioPredictor
+from processor import TransferProcessor
 
 # ── Page config ───────────────────────────────────────────────────────────
 st.set_page_config(
@@ -27,12 +28,17 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── Cached predictor instance ─────────────────────────────────────────────
+# ── Cached instances ──────────────────────────────────────────────────────
 @st.cache_resource
 def get_predictor() -> FabrizioPredictor:
     return FabrizioPredictor()
 
-predictor = get_predictor()
+@st.cache_resource
+def get_processor() -> TransferProcessor:
+    return TransferProcessor()
+
+predictor  = get_predictor()
+_processor = get_processor()
 
 # ── Club lists ────────────────────────────────────────────────────────────
 PREMIER_LEAGUE = [
@@ -293,10 +299,31 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-st.caption(
-    "⚠️ Predictions are AI-generated for entertainment. "
-    "They factor in scraped KB data — the more articles in your KB, the better the predictions."
-)
+# ── KB freshness warning ──────────────────────────────────────────────────
+_stats = _processor.stats()
+_kb_count = _stats.get("total_articles", 0)
+_last_scrape = _stats.get("last_scrape", "Never")
+
+if _kb_count == 0:
+    st.error(
+        "🚨 **Knowledge base is empty.** Predictions will be unreliable — Gemini has no current "
+        "season data to reason from. Go to **📰 News Feed** and click **Scrape Now**, or ask a "
+        "question in **💬 Chat** first to populate the KB.",
+        icon="🚨",
+    )
+elif _kb_count < 20:
+    st.warning(
+        f"⚠️ **Only {_kb_count} articles in KB** (last scrape: {_last_scrape}). "
+        "Predictions may be inaccurate. Scrape more data via **📰 News Feed → Scrape Now** "
+        "for better results.",
+        icon="⚠️",
+    )
+else:
+    st.info(
+        f"📊 **{_kb_count} articles in KB** · Last scrape: {_last_scrape}. "
+        "Predictions are grounded in your scraped transfer news — scrape fresh data before predicting for best accuracy.",
+        icon="📊",
+    )
 
 # ── Tabs ──────────────────────────────────────────────────────────────────
 tab_match, tab_league, tab_transfer = st.tabs([
