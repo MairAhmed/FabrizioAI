@@ -1,6 +1,6 @@
 # ⚽ FabrizioAI — Transfer Intelligence Agent
 
-> *"Here We Go!"* — A fully agentic football transfer intelligence app powered by Google Gemini and LangGraph. Chat with it, browse live news, and run AI-powered predictions — all in the style of Fabrizio Romano.
+> *"Here We Go!"* — A fully agentic football transfer intelligence app powered by Google Gemini and LangGraph. Chat with it, browse live news, run AI-powered predictions, and track player movements on a live timeline — all in the style of Fabrizio Romano.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.35%2B-red?style=flat-square&logo=streamlit)
@@ -12,13 +12,14 @@
 
 ## 🧠 What It Does
 
-FabrizioAI is a multi-page transfer intelligence platform. It scrapes 8 live football sources, stores articles in a persistent SQLite knowledge base, and lets you interact with that data in three ways:
+FabrizioAI is a multi-page transfer intelligence platform. It scrapes 13 live football sources, stores articles in a persistent SQLite knowledge base, and lets you interact with that data in four ways:
 
 | Page | What it does |
 |------|-------------|
 | **💬 Chat** | Ask anything about transfers, players, or clubs — the agent scrapes live sources and reasons with Gemini |
 | **📰 News Feed** | Browse all scraped articles in a card grid, filterable by league and confidence |
 | **🔮 Predictor** | AI-powered mini-game: predict match results, league champions, and transfer window moves |
+| **⏱️ Timeline** | Gemini-extracted player movement tracker — joining & leaving, grouped by date |
 
 ---
 
@@ -33,10 +34,11 @@ FabrizioAI/
 │   ├── prompts.py               # Fabrizio Romano personality prompt
 │   └── pages/
 │       ├── 1_📰_News_Feed.py    # Live article feed page
-│       └── 2_🔮_Predictor.py   # Match / league / transfer predictor
+│       ├── 2_🔮_Predictor.py   # Match / league / transfer predictor
+│       └── 3_⏱️_Timeline.py    # AI-powered player movement timeline
 │
 ├── scripts/
-│   ├── scraper.py               # Concurrent scraper — 8 sources, multi-URL fallback
+│   ├── scraper.py               # Concurrent scraper — 13 sources, multi-URL fallback
 │   └── processor.py             # SQLite-backed article store + watchlist
 │
 ├── .chroma_db/
@@ -70,6 +72,8 @@ The scraper pulls from 13 trusted football sources concurrently. Each source has
 | MLS Soccer | MLS |
 | Saudi Pro League News | Saudi Pro League |
 
+All articles are filtered for English language and football content before being stored — no other sports, no French/Spanish/German/Italian articles slipping through.
+
 ---
 
 ## ✨ Feature Overview
@@ -91,25 +95,36 @@ The scraper pulls from 13 trusted football sources concurrently. Each source has
 - Card-based grid of all scraped articles (1/2/3 column layout)
 - Filter by league, minimum confidence, and sort order
 - Confidence bar and league tag on every card
-- "Scrape Now" button hits all 8 sources directly from the feed
+- "Scrape Now" button hits all 13 sources directly from the feed
+- English-only and football-only display filters applied on top of the KB
 - Knowledge base stats (total articles, sources scraped)
 
 ### 🔮 Predictor Page
 Three prediction modes, all powered by Gemini grounded in your scraped KB:
 
 **⚽ Match Predictor**
-- Pick any two clubs from all five major leagues
+- Pick any two clubs from all major leagues (Premier League, La Liga, Serie A, Bundesliga, Ligue 1, MLS, Saudi Pro League + European clubs)
 - Returns: win/draw/loss probabilities, predicted scoreline, last-5 form, key factors, expert analysis
-- Confetti on high-confidence predictions
 
 **🏆 League & Trophy Predictor**
-- Covers all major competitions including Champions League, Europa League, and Club World Cup
+- Covers all major competitions including Champions League, Europa League, Conference League, Club World Cup, Leagues Cup, and all domestic cups
 - Returns: medal podium for top 5 contenders with probability bars, dark horse pick, key storylines
+- Grounded strictly in KB articles — won't repeat stale training data (e.g. won't show knocked-out teams as favourites)
 
 **🔄 Transfer Window Predictor**
 - Summer or Winter window, filterable by league and player/club focus
-- Returns: 8 ranked transfer predictions each with player, clubs, fee estimate, likelihood %, status pill (Rumour → Almost Certain), and reasoning
+- Returns: ranked transfer predictions each with player, clubs, fee estimate, likelihood %, status pill (Rumour → Almost Certain), and reasoning
+- Only predicts named, real players — never invents "Undisclosed Striker" or "Top European Club" placeholders
 - Highlights the "biggest surprise" move nobody is talking about yet
+- Shows a KB freshness warning if the knowledge base is empty or sparse
+
+### ⏱️ Timeline Page
+- **On-demand Gemini extraction** — click "Extract Transfers (AI)" to have Gemini read all KB articles and identify only actual player transfer moves (not injuries, suspensions, or match news)
+- Player movement cards showing: player name, JOINING/LEAVING badge, from→to clubs, confidence bar, league tag, source link, and the original headline
+- Filters: league, confidence, direction (all / joining / leaving), player/club search, date range
+- Summary metrics: total moves, players tracked, joining count, leaving count
+- **Quota-safe**: uses `gemini-1.5-flash` (1,500 free calls/day) with `gemini-2.0-flash` as fallback; gracefully degrades to regex extraction if quota is exhausted
+- Results cached for 10 minutes to avoid redundant API calls
 
 ---
 
@@ -167,7 +182,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 python -m streamlit run app/main.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501) in your browser. The News Feed and Predictor pages appear automatically in the Streamlit sidebar.
+Open [http://localhost:8501](http://localhost:8501) in your browser. The News Feed, Predictor, and Timeline pages appear automatically in the Streamlit sidebar.
 
 ---
 
@@ -179,6 +194,8 @@ Open [http://localhost:8501](http://localhost:8501) in your browser. The News Fe
 - *"What's the latest on Mbappé?"*
 - *"Top Serie A signings this summer"*
 - *"Any Bundesliga rumours this week?"*
+- *"Latest MLS transfer news"*
+- *"Who has Al-Hilal signed recently?"*
 
 ---
 
@@ -237,27 +254,35 @@ The agent runs a **maximum of 2 tool calls** per query to keep responses fast.
 
 Articles are stored in a local SQLite database at `.chroma_db/articles.db`. It persists between sessions — the more you use the app, the richer the KB gets and the better the Predictor's grounding becomes. The KB loads the 500 most recent articles into memory on startup for fast keyword retrieval.
 
+The Predictor strictly uses KB articles for current-season facts and will not rely on Gemini's potentially outdated training data. If the KB is empty or sparse, a freshness warning banner is shown before predicting.
+
 ---
 
 ## ⚠️ Common Issues
 
 **`Agent error: futures unfinished`**
-A slow scraping source timed out. This is now handled gracefully — the app collects results from whichever sources finished and discards the rest. You'll still get an answer from the KB or the fast sources.
+A slow scraping source timed out. This is handled gracefully — the app collects results from whichever sources finished and discards the rest. You'll still get an answer from the KB or the fast sources.
 
-**`429 RESOURCE_EXHAUSTED`**
-Your free-tier Gemini quota is used up. Options:
+**`429 RESOURCE_EXHAUSTED` on Chat/Predictor**
+Your free-tier `gemini-2.5-flash` quota is used up (20 RPD on the free tier). Options:
 - Wait for midnight PT reset
 - Create a new API key at [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
-- Enable billing on your Google Cloud project (very cheap, ~$0.01 per query)
+- Enable billing on your Google Cloud project (~$0.01 per query)
+
+**`429 RESOURCE_EXHAUSTED` on Timeline**
+The Timeline uses `gemini-1.5-flash` (1,500 RPD free) with `gemini-2.0-flash` as fallback. If both are exhausted it automatically falls back to regex extraction. This is much harder to hit than the Chat quota.
 
 **`Model not found (404)`**
-The model name is outdated. The app uses `gemini-2.5-flash` by default — update `utils.py` if needed.
+The model name is outdated. The Chat and Predictor use `gemini-2.5-flash`; the Timeline uses `gemini-1.5-flash`. Update `utils.py` or the Timeline page if needed.
 
 **Slow responses**
 Turn off **Live web scrape** in the sidebar for faster answers using the cached knowledge base only.
 
 **Scrapers returning no results**
 Some sites block automated requests. The scraper tries multiple fallback URLs per source and fails silently — other sources continue normally. You can see which sources are active in the **Session Stats** panel.
+
+**Predictor showing wrong/outdated transfers**
+Scrape fresh data first via **📰 News Feed → Scrape Now**, then run the prediction. The Predictor only trusts KB articles for current-season facts — the more up-to-date your KB, the more accurate the predictions.
 
 ---
 
@@ -267,7 +292,8 @@ Some sites block automated requests. The scraper tries multiple fallback URLs pe
 |-------|-----------|
 | UI | [Streamlit](https://streamlit.io) (multipage) |
 | Agent framework | [LangGraph](https://langchain-ai.github.io/langgraph/) |
-| LLM | [Google Gemini 2.5 Flash](https://ai.google.dev) via LangChain |
+| LLM (Chat + Predictor) | [Google Gemini 2.5 Flash](https://ai.google.dev) via LangChain |
+| LLM (Timeline extraction) | [Google Gemini 1.5 Flash](https://ai.google.dev) via LangChain |
 | Scraping | [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) + `requests` (concurrent) |
 | Knowledge base | SQLite (built-in, no external DB needed) |
 | Confetti | [canvas-confetti](https://github.com/catdad/canvas-confetti) |
@@ -280,4 +306,4 @@ MIT License — do whatever you want with it.
 
 ---
 
-*Built by [Mair Ahmed](https://github.com/Mai
+*Built by [Mair Ahmed](https://github.com/MairAhmed)*
