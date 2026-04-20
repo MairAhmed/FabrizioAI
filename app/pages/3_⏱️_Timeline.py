@@ -1,12 +1,12 @@
 """
 pages/3_⏱️_Timeline.py – Transfer Timeline
-Player-focused chronological feed: extracts player name and clubs from
-article titles, groups by date, shows joining/leaving direction with
-visual from→to cards.
+Gemini-powered extraction: sends KB articles to Gemini which identifies
+ONLY actual transfer moves (not injuries, suspensions, financial news),
+then displays them as player movement cards grouped by date.
 """
 
 import sys
-import re
+import json
 import datetime as dt
 from pathlib import Path
 from collections import defaultdict
@@ -56,7 +56,7 @@ LEAGUE_COLORS = {
 SOURCE_LEAGUE_MAP = {
     "Fabrizio Romano (Twitter/X)":       "All",
     "Fabrizio Romano (Caught Offside)":  "All",
-    "ESPN Soccer":                       "All",
+    "ESPN Soccer":           "All",
     "BBC Sport Transfers":   "All",
     "Goal.com Transfers":    "All",
     "Sky Sports Transfers":  "Premier League",
@@ -69,104 +69,101 @@ SOURCE_LEAGUE_MAP = {
     "Saudi Pro League News": "Saudi Pro League",
 }
 
-
-# ── Player + club extraction ──────────────────────────────────────────────
-
-def _clean(s: str) -> str:
-    return re.sub(r'\s+', ' ', s).strip().rstrip(".,!;:")
-
-
-def parse_transfer(title: str, text: str = "") -> dict:
-    """
-    Try to extract: player, to_club, from_club, direction ('joining'/'leaving').
-    Returns a dict; player=None means no individual player was identified.
-    """
-    result = {"player": None, "to_club": None, "from_club": None, "direction": None}
-    t = title  # original case
-
-    # ── Pattern A: "HERE WE GO! Player to Club" ───────────────────────────
-    m = re.match(
-        r'(?:here\s+we\s+go[!.]?\s+)?'
-        r'([A-Z][a-záéíóúàèùâêîôûäëïöü\'\-]+(?:\s+(?:de\s+|van\s+|van\s+der\s+|el\s+|al\s+)?'
-        r'[A-Z][a-záéíóúàèùâêîôûäëïöü\'\-]+){1,3})'
-        r'\s+(?:to|joins?|signs?\s+for|signs?|moves?\s+to|heading\s+to|'
-        r'set\s+to\s+join|close\s+to\s+joining|nearing\s+move\s+to|'
-        r'completes?\s+move\s+to|agrees?\s+to\s+join|confirmed\s+at)\s+'
-        r'([A-Z][A-Za-záéíóú\s\.\-\']+?)(?:\s*[,!;:\-]|\s+(?:on|for|in|at|with|after|as|from)\b|$)',
-        t, re.IGNORECASE,
-    )
-    if m:
-        result["player"]    = _clean(m.group(1))
-        result["to_club"]   = _clean(m.group(2))
-        result["direction"] = "joining"
-        return result
-
-    # ── Pattern B: "Club sign(s)/agree/complete Player" ──────────────────
-    m = re.match(
-        r'([A-Z][A-Za-záéíóú\s\.\-\']{3,40}?)\s+'
-        r'(?:sign|signs|agree|agrees|complete|completes|confirm|confirms|land|lands|'
-        r'secure|secures|announce|announces)\s+'
-        r'(?:deal\s+for\s+|signing\s+of\s+|transfer\s+of\s+)?'
-        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})',
-        t,
-    )
-    if m:
-        result["to_club"]   = _clean(m.group(1))
-        result["player"]    = _clean(m.group(2))
-        result["direction"] = "joining"
-        return result
-
-    # ── Pattern C: "Player set to leave / leaves / exits Club" ───────────
-    m = re.match(
-        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})'
-        r'\s+(?:leaves?|exits?|departs?|set\s+to\s+leave|expected\s+to\s+leave|'
-        r'wants?\s+to\s+leave|could\s+leave|looking\s+to\s+leave|'
-        r'will\s+leave|officially\s+leaves?)'
-        r'(?:\s+([A-Z][A-Za-záéíóú\s\.\-\']+?)(?:\s*[,;:\-]|$))?',
-        t, re.IGNORECASE,
-    )
-    if m:
-        result["player"]    = _clean(m.group(1))
-        result["from_club"] = _clean(m.group(2)) if m.group(2) else None
-        result["direction"] = "leaving"
-        return result
-
-    # ── Pattern D: "Club target/eye/want Player" ─────────────────────────
-    m = re.match(
-        r'([A-Z][A-Za-záéíóú\s\.\-\']{3,40}?)\s+'
-        r'(?:target|targets|eye|eyes|want|wants|pursuing|consider|considers|'
-        r'monitor|monitors|interested\s+in|bid\s+for|make\s+move\s+for)\s+'
-        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})',
-        t,
-    )
-    if m:
-        result["to_club"]   = _clean(m.group(1))
-        result["player"]    = _clean(m.group(2))
-        result["direction"] = "joining"
-        return result
-
-    # ── Pattern E: "Player from Club to Club" ────────────────────────────
-    m = re.match(
-        r'([A-Z][a-záéíóú\'\-]+(?:\s+[A-Z][a-záéíóú\'\-]+){1,3})'
-        r'\s+from\s+([A-Z][A-Za-záéíóú\s\.\-\']+?)'
-        r'\s+to\s+([A-Z][A-Za-záéíóú\s\.\-\']+?)(?:\s*[,;:\-]|$)',
-        t, re.IGNORECASE,
-    )
-    if m:
-        result["player"]    = _clean(m.group(1))
-        result["from_club"] = _clean(m.group(2))
-        result["to_club"]   = _clean(m.group(3))
-        result["direction"] = "joining"
-        return result
-
-    return result
-
-
 def article_league(article: dict) -> str:
     tags = article.get("league_tags", [])
     if tags and tags[0] != "All":
         return tags[0]
     return SOURCE_LEAGUE_MAP.get(article.get("source", ""), "All")
+
+
+# ── Gemini-powered transfer extraction ───────────────────────────────────
+_EXTRACTION_PROMPT = """You are a football transfer news parser. Your ONLY job is to identify actual player transfer moves.
+
+Given the numbered list of article headlines + snippets below, extract ONLY entries that describe:
+- A player joining or moving to a club (confirmed, agreed, close, targeted, linked, bid made)
+- A player leaving or expected to leave a club
+
+DO NOT include:
+- Match reports or previews
+- Player injuries or fitness news
+- Suspensions or bans
+- Financial/FFP news
+- Manager appointments
+- Contract extensions (unless a player is ALSO linked to another club)
+- General club/league news with no specific transfer move
+
+For each valid transfer move, output a JSON object with:
+{
+  "article_index": <number from the list>,
+  "player": "<full player name>",
+  "from_club": "<current/selling club, or null if unknown>",
+  "to_club": "<destination club, or null if unknown>",
+  "direction": "joining" or "leaving",
+  "league": "<league of destination/current club, e.g. Premier League, or All if unclear>"
+}
+
+Return ONLY a JSON array. If no transfer moves found, return [].
+No explanation text — just the JSON array."""
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def extract_transfers_with_gemini(articles_json: str) -> list[dict]:
+    """
+    Send article headlines to Gemini for structured transfer extraction.
+    Cached for 5 minutes to avoid re-calling on every Streamlit rerun.
+    articles_json is a JSON string of [{index, title, text, url, source, date, confidence}]
+    """
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return []
+
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=api_key,
+            temperature=0.1,
+        )
+
+        articles = json.loads(articles_json)
+        if not articles:
+            return []
+
+        # Build numbered article list
+        lines = []
+        for a in articles:
+            lines.append(
+                f"{a['index']}. [{a['source']} | {a['date']} | conf:{a['confidence']}]\n"
+                f"   Headline: {a['title']}\n"
+                f"   Snippet:  {a['text'][:200]}"
+            )
+        articles_text = "\n\n".join(lines)
+
+        response = llm.invoke([
+            SystemMessage(content=_EXTRACTION_PROMPT),
+            HumanMessage(content=f"Extract transfer moves from these {len(articles)} articles:\n\n{articles_text}"),
+        ])
+
+        raw = response.content.strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+
+    except Exception as e:
+        st.session_state["_gemini_tl_error"] = str(e)
+        return []
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────
@@ -187,7 +184,6 @@ st.markdown("""
   .tl-header h1   { color: #fff; font-size: 2rem; margin: 0; }
   .tl-header .sub { color: #f59e0b; font-size: 0.82rem; letter-spacing: 0.15em; text-transform: uppercase; }
 
-  /* Date separator */
   .date-group {
     display: flex; align-items: center; gap: 1rem;
     margin: 2.2rem 0 1rem 0;
@@ -204,7 +200,6 @@ st.markdown("""
     background: linear-gradient(to right, #78350f55, transparent);
   }
 
-  /* Timeline row */
   .tl-row {
     display: flex; gap: 0;
     margin: 0 0 0.6rem 1.4rem;
@@ -223,7 +218,6 @@ st.markdown("""
     background: #1e293b; margin-top: 3px;
   }
 
-  /* ── PLAYER TRANSFER CARD ── */
   .ptcard {
     flex: 1; margin-left: 10px;
     background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
@@ -234,7 +228,6 @@ st.markdown("""
   }
   .ptcard:hover { transform: translateX(3px); }
 
-  /* Player name row */
   .ptcard-name {
     font-family: 'Oswald', sans-serif;
     font-size: 1.15rem; font-weight: 600;
@@ -242,7 +235,6 @@ st.markdown("""
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   }
 
-  /* From → To clubs row */
   .clubs-row {
     display: flex; align-items: center; gap: 8px;
     margin: 0 0 0.5rem 0; flex-wrap: wrap;
@@ -254,9 +246,8 @@ st.markdown("""
     border: 1px solid #334155;
     color: #cbd5e1; background: #1e293b;
   }
-  .club-arrow {
-    font-size: 1rem; color: #f59e0b; font-weight: 700;
-  }
+  .club-arrow { font-size: 1rem; color: #f59e0b; font-weight: 700; }
+
   .dir-badge-join {
     display: inline-block;
     font-family: 'Oswald', sans-serif;
@@ -274,14 +265,12 @@ st.markdown("""
     border: 1px solid #ef444455;
   }
 
-  /* Confidence bar */
   .mini-bar-bg {
     background: #0f172a; border-radius: 3px;
     height: 4px; overflow: hidden; margin: 6px 0 5px;
   }
   .mini-bar-fill { height: 100%; border-radius: 3px; }
 
-  /* Meta row */
   .ptcard-meta {
     display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
     margin-top: 4px;
@@ -297,28 +286,15 @@ st.markdown("""
     letter-spacing: 0.06em; padding: 1px 8px;
     border-radius: 10px; border: 1px solid;
   }
-  .src-link {
-    font-size: 0.70rem; color: #60a5fa; text-decoration: none;
-  }
+  .src-link { font-size: 0.70rem; color: #60a5fa; text-decoration: none; }
   .src-link:hover { text-decoration: underline; }
 
-  /* Generic news card (no player parsed) */
-  .news-card {
-    flex: 1; margin-left: 10px;
-    background: #111827;
-    border: 1px solid #1e2a3a;
-    border-radius: 8px;
-    padding: 0.65rem 1rem;
-    transition: transform 0.15s;
-    opacity: 0.72;
-  }
-  .news-card:hover { transform: translateX(2px); opacity: 1; }
-  .news-title {
-    font-size: 0.88rem; color: #94a3b8; line-height: 1.4;
-    margin: 0 0 4px 0;
+  .ptcard-headline {
+    font-size: 0.8rem; color: #64748b;
+    margin: 0 0 0.4rem 0; font-style: italic;
+    line-height: 1.4;
   }
 
-  /* Sidebar */
   section[data-testid="stSidebar"] {
     background: #0a0a0a; border-right: 1px solid #1e1e2e;
   }
@@ -340,7 +316,7 @@ st.markdown("""
 st.markdown("""
 <div class="tl-header">
   <h1>⏱️ Transfer Timeline</h1>
-  <div class="sub">Player movements · Joining &amp; leaving · Grouped by date</div>
+  <div class="sub">Gemini-powered · Strictly transfer moves · Grouped by date</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -367,10 +343,13 @@ with st.sidebar:
         placeholder="e.g. Bellingham, Arsenal",
     )
     max_days = st.slider("Days to show", 1, 30, 7)
-    show_news = st.toggle(
-        "Show general news (no player)", value=False,
-        help="Show articles where no specific player was identified",
-    )
+
+    st.divider()
+
+    if st.button("🔄 Re-extract transfers", use_container_width=True,
+                 help="Force Gemini to re-analyse the KB articles"):
+        st.cache_data.clear()
+        st.rerun()
 
     st.divider()
     stats = _processor.stats()
@@ -389,18 +368,17 @@ with st.sidebar:
         st.switch_page("main.py")
 
 
-
-# ── Language & sport display filters (safety net for existing KB articles) ─
+# ── Language & sport display filters ──────────────────────────────────────
 _NON_ENG = frozenset({
     "les","des","une","dans","avec","pour","mais","très","selon","depuis",
     "lors","cette","aussi","même","tout","après","avant","dont","jamais",
-    "encore","toujours","peut","être","quand","sous","vers",            # FR
+    "encore","toujours","peut","être","quand","sous","vers",
     "los","las","para","también","pero","están","cuando","donde","aunque",
-    "desde","hasta","nunca","siempre","después","sobre","siendo","según",  # ES
+    "desde","hasta","nunca","siempre","después","sobre","siendo","según",
     "und","nicht","sich","aber","wird","kann","oder","wenn","nach","über",
-    "beim","durch","gegen","ohne","unter","zwischen","dann","schon","dass", # DE
+    "beim","durch","gegen","ohne","unter","zwischen","dann","schon","dass",
     "della","dello","degli","delle","nella","sono","hanno","anche","molto",
-    "tutto","dopo","prima","perché","però","ogni","questi","queste",        # IT
+    "tutto","dopo","prima","perché","però","ogni","questi","queste",
 })
 _OTHER_SPORTS = frozenset({
     "nba","nfl","nhl","mlb","wnba","basketball","american football",
@@ -424,92 +402,141 @@ def _is_football(title: str, text: str) -> bool:
     combined = (title + " " + text[:500]).lower()
     return not any(term in combined for term in _OTHER_SPORTS)
 
-# ── Fetch + parse articles ──────────────────────────────────────────────────
-all_articles = _processor.get_recent_articles(limit=500, min_confidence=min_conf)
+
+# ── Fetch KB articles ──────────────────────────────────────────────────────
 cutoff = (dt.date.today() - dt.timedelta(days=max_days)).isoformat()
+kb_articles_raw = [
+    a for a in _processor.get_recent_articles(limit=500, min_confidence=min_conf)
+    if a.get("date", "9999-12-31") >= cutoff
+    and _is_english(a.get("title", ""), a.get("text", ""))
+    and _is_football(a.get("title", ""), a.get("text", ""))
+]
 
-enriched = []
-for a in all_articles:
-    if a.get("date", "9999-12-31") < cutoff:
-        continue
+# Build index map: index → article
+indexed = {i: a for i, a in enumerate(kb_articles_raw)}
 
-    # Language + sport filter
-    if not _is_english(a.get("title", ""), a.get("text", "")):
+# ── Call Gemini for extraction (cached) ───────────────────────────────────
+kb_count = stats.get("total_articles", 0)
+
+if kb_count == 0:
+    st.warning(
+        "📭 Knowledge base is empty. Scrape articles first via **📰 News Feed → Scrape Now**.",
+        icon="📭",
+    )
+    st.stop()
+
+if not kb_articles_raw:
+    st.info(
+        f"No articles found in the last **{max_days} days** meeting the confidence filter. "
+        "Try increasing the date range or lowering the confidence slider.",
+        icon="ℹ️",
+    )
+    st.stop()
+
+# Prepare JSON payload for caching key
+articles_payload = json.dumps([
+    {
+        "index": i,
+        "title": a.get("title", ""),
+        "text":  a.get("text", "")[:300],
+        "url":   a.get("url", "#"),
+        "source": a.get("source", "Unknown"),
+        "date":  a.get("date", ""),
+        "confidence": a.get("confidence", 1),
+    }
+    for i, a in indexed.items()
+])
+
+with st.spinner(f"🤖 Gemini extracting transfer moves from {len(kb_articles_raw)} articles…"):
+    extracted = extract_transfers_with_gemini(articles_payload)
+
+# Show Gemini error if any (non-blocking)
+if "_gemini_tl_error" in st.session_state:
+    err = st.session_state.pop("_gemini_tl_error")
+    st.warning(f"⚠️ Gemini extraction error: `{err}`. Check your API key.", icon="⚠️")
+
+
+# ── Build enriched move list ───────────────────────────────────────────────
+# Merge Gemini extraction results back with full article data
+moves = []
+for entry in extracted:
+    idx = entry.get("article_index")
+    if idx is None or idx not in indexed:
         continue
-    if not _is_football(a.get("title", ""), a.get("text", "")):
+    a = indexed[idx]
+
+    direction = entry.get("direction", "joining")
+    player    = (entry.get("player") or "").strip()
+    to_club   = (entry.get("to_club") or "").strip() or None
+    from_club = (entry.get("from_club") or "").strip() or None
+
+    # Use Gemini's league if meaningful, else fall back to source map
+    gemini_league = (entry.get("league") or "").strip()
+    league = gemini_league if gemini_league and gemini_league != "All" else article_league(a)
+
+    if not player:
         continue
 
     # League filter
-    league = article_league(a)
     if "All" not in league_filter:
         if league not in league_filter and league != "All":
             continue
 
-    # Parse player info
-    info = parse_transfer(a.get("title", ""), a.get("text", ""))
-    a["_player"]    = info["player"]
-    a["_to_club"]   = info["to_club"]
-    a["_from_club"] = info["from_club"]
-    a["_direction"] = info["direction"]
-    a["_league"]    = league
-    a["_has_player"] = info["player"] is not None
-
     # Direction filter
-    if direction_filter == "Joining ✈️" and info["direction"] not in (None, "joining"):
+    if direction_filter == "Joining ✈️" and direction != "joining":
         continue
-    if direction_filter == "Leaving 🚪" and info["direction"] != "leaving":
+    if direction_filter == "Leaving 🚪" and direction != "leaving":
         continue
 
     # Search filter
     if search_term.strip():
-        haystack = (
-            (info["player"] or "") + " " +
-            (info["to_club"] or "") + " " +
-            (info["from_club"] or "") + " " +
-            a.get("title", "")
-        ).lower()
+        haystack = (player + " " + (to_club or "") + " " + (from_club or "") + " " + a.get("title", "")).lower()
         if search_term.lower() not in haystack:
             continue
 
-    # Skip general news unless toggled
-    if not info["player"] and not show_news:
-        continue
+    moves.append({
+        "player":    player,
+        "to_club":   to_club,
+        "from_club": from_club,
+        "direction": direction,
+        "league":    league,
+        "article":   a,
+    })
 
-    enriched.append(a)
-
-# Group by date descending
+# Group by date
 by_date: dict[str, list] = defaultdict(list)
-for a in enriched:
-    by_date[a.get("date", "Unknown")].append(a)
+for m in moves:
+    by_date[m["article"].get("date", "Unknown")].append(m)
 sorted_dates = sorted(by_date.keys(), reverse=True)
 
 
-# ── Summary counts ─────────────────────────────────────────────────────────
-player_articles = [a for a in enriched if a["_has_player"]]
-joining = sum(1 for a in player_articles if a["_direction"] == "joining")
-leaving = sum(1 for a in player_articles if a["_direction"] == "leaving")
+# ── Summary metrics ────────────────────────────────────────────────────────
+if moves:
+    joining_n = sum(1 for m in moves if m["direction"] == "joining")
+    leaving_n = sum(1 for m in moves if m["direction"] == "leaving")
+    players_n = len({m["player"] for m in moves})
 
-if enriched:
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total entries", len(enriched))
-    c2.metric("Players tracked", len({a["_player"] for a in player_articles if a["_player"]}))
-    c3.metric("Joining ✈️", joining)
-    c4.metric("Leaving 🚪", leaving)
+    c1.metric("Transfer moves", len(moves))
+    c2.metric("Players tracked", players_n)
+    c3.metric("Joining ✈️", joining_n)
+    c4.metric("Leaving 🚪", leaving_n)
     st.divider()
 
 
 # ── Render ──────────────────────────────────────────────────────────────────
-if not enriched:
+if not moves:
     st.markdown("""
     <div class="empty-tl">
-      <h3>📭 No transfer movements found</h3>
-      <p>Try adjusting the filters, expanding the date range,<br>
-         or scraping fresh articles from the <strong>📰 News Feed</strong> page.</p>
+      <h3>📭 No transfer moves found</h3>
+      <p>Gemini found no actual transfer moves in the current KB articles.<br>
+         Try <strong>scraping fresh data</strong> from the 📰 News Feed page,<br>
+         expanding the date range, or lowering the confidence filter.</p>
     </div>
     """, unsafe_allow_html=True)
 else:
     for date_str in sorted_dates:
-        articles = by_date[date_str]
+        day_moves = by_date[date_str]
 
         try:
             d = dt.date.fromisoformat(date_str)
@@ -523,7 +550,7 @@ else:
         except ValueError:
             label = date_str
 
-        n = len(articles)
+        n = len(day_moves)
         st.markdown(
             f'<div class="date-group">'
             f'  <div class="date-badge">📅 {label} &nbsp;·&nbsp; '
@@ -534,101 +561,83 @@ else:
             unsafe_allow_html=True,
         )
 
-        for idx, a in enumerate(articles):
+        for idx, m in enumerate(day_moves):
+            a         = m["article"]
             conf      = a.get("confidence", 1)
             cp        = CONF_COLORS.get(conf, CONF_COLORS[1])
             conf_pct  = int((conf / 5) * 100)
-            lp        = LEAGUE_COLORS.get(a["_league"], LEAGUE_COLORS["All"])
-            is_last   = (idx == len(articles) - 1)
+            lp        = LEAGUE_COLORS.get(m["league"], LEAGUE_COLORS["All"])
+            is_last   = (idx == len(day_moves) - 1)
             vline     = "" if is_last else '<div class="tl-vline"></div>'
             url       = a.get("url", "#")
             source    = a.get("source", "Unknown")
             title     = a.get("title", "No title")
 
-            if a["_has_player"]:
-                # ── Player transfer card ─────────────────────────────────
-                player    = a["_player"]
-                to_club   = a["_to_club"]
-                from_club = a["_from_club"]
-                direction = a["_direction"]
+            player    = m["player"]
+            to_club   = m["to_club"]
+            from_club = m["from_club"]
+            direction = m["direction"]
+            league    = m["league"]
 
-                # Clubs row HTML
-                if direction == "joining":
-                    dir_badge = '<span class="dir-badge-join">✈️ JOINING</span>'
-                    if from_club and to_club:
-                        clubs_html = (
-                            f'<span class="club-pill">🏟️ {from_club}</span>'
-                            f'<span class="club-arrow">→</span>'
-                            f'<span class="club-pill" style="border-color:{cp["border"]}55;'
-                            f'color:{cp["text"]};">'
-                            f'🎯 {to_club}</span>'
-                        )
-                    elif to_club:
-                        clubs_html = (
-                            f'<span class="club-pill" style="border-color:{cp["border"]}55;'
-                            f'color:{cp["text"]};">'
-                            f'🎯 {to_club}</span>'
-                        )
-                    else:
-                        clubs_html = ""
+            if direction == "joining":
+                dir_badge = '<span class="dir-badge-join">✈️ JOINING</span>'
+                if from_club and to_club:
+                    clubs_html = (
+                        f'<span class="club-pill">🏟️ {from_club}</span>'
+                        f'<span class="club-arrow">→</span>'
+                        f'<span class="club-pill" style="border-color:{cp["border"]}55;'
+                        f'color:{cp["text"]};">🎯 {to_club}</span>'
+                    )
+                elif to_club:
+                    clubs_html = (
+                        f'<span class="club-pill" style="border-color:{cp["border"]}55;'
+                        f'color:{cp["text"]};">🎯 {to_club}</span>'
+                    )
                 else:
-                    dir_badge = '<span class="dir-badge-leave">🚪 LEAVING</span>'
-                    if from_club:
-                        clubs_html = (
-                            f'<span class="club-pill" style="border-color:#ef444455;'
-                            f'color:#fca5a5;">🏟️ {from_club}</span>'
-                            f'<span class="club-arrow" style="color:#ef4444;">→</span>'
-                            f'<span class="club-pill">❓ Destination TBD</span>'
-                        )
-                    else:
-                        clubs_html = ""
-
-                clubs_section = (
-                    f'<div class="clubs-row">{clubs_html}</div>'
-                    if clubs_html else ""
-                )
-                st.markdown(
-                    f'<div class="tl-row">'
-                    f'  <div class="tl-spine">'
-                    f'    <div class="tl-dot" style="border-color:{cp["border"]};background:{cp["bg"]};"></div>'
-                    f'    {vline}'
-                    f'  </div>'
-                    f'  <div class="ptcard" style="border-color:{cp["border"]}44;">'
-                    f'    <div class="ptcard-name">'
-                    f'      👤 {player}'
-                    f'      {dir_badge}'
-                    f'    </div>'
-                    f'    {clubs_section}'
-                    f'    <div class="mini-bar-bg">'
-                    f'      <div class="mini-bar-fill" style="width:{conf_pct}%;background:{cp["border"]};"></div>'
-                    f'    </div>'
-                    f'    <div class="ptcard-meta">'
-                    f'      <span class="conf-pill" style="background:{cp["bg"]};color:{cp["text"]};'
-                    f'             border-color:{cp["border"]}66;">{cp["label"]}</span>'
-                    f'      <span class="meta-chip" style="background:{lp["bg"]};color:{lp["text"]};'
-                    f'             border-color:{lp["border"]};">{a["_league"]}</span>'
-                    f'      <a class="src-link" href="{url}" target="_blank">📡 {source}</a>'
-                    f'    </div>'
-                    f'  </div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+                    clubs_html = ""
             else:
-                # ── Generic news card ────────────────────────────────────
-                st.markdown(
-                    f'<div class="tl-row">'
-                    f'  <div class="tl-spine">'
-                    f'    <div class="tl-dot" style="border-color:#334155;background:#1e293b;"></div>'
-                    f'    {vline}'
-                    f'  </div>'
-                    f'  <div class="news-card">'
-                    f'    <div class="news-title">📰 {title}</div>'
-                    f'    <div class="ptcard-meta">'
-                    f'      <span class="conf-pill" style="background:{cp["bg"]};color:{cp["text"]};'
-                    f'             border-color:{cp["border"]}66;">{cp["label"]}</span>'
-                    f'      <a class="src-link" href="{url}" target="_blank">📡 {source}</a>'
-                    f'    </div>'
-                    f'  </div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+                dir_badge = '<span class="dir-badge-leave">🚪 LEAVING</span>'
+                if from_club and to_club:
+                    clubs_html = (
+                        f'<span class="club-pill" style="border-color:#ef444455;color:#fca5a5;">🏟️ {from_club}</span>'
+                        f'<span class="club-arrow" style="color:#ef4444;">→</span>'
+                        f'<span class="club-pill" style="border-color:{cp["border"]}55;color:{cp["text"]};">🎯 {to_club}</span>'
+                    )
+                elif from_club:
+                    clubs_html = (
+                        f'<span class="club-pill" style="border-color:#ef444455;color:#fca5a5;">🏟️ {from_club}</span>'
+                        f'<span class="club-arrow" style="color:#ef4444;">→</span>'
+                        f'<span class="club-pill">❓ TBD</span>'
+                    )
+                else:
+                    clubs_html = ""
+
+            clubs_section = f'<div class="clubs-row">{clubs_html}</div>' if clubs_html else ""
+
+            st.markdown(
+                f'<div class="tl-row">'
+                f'  <div class="tl-spine">'
+                f'    <div class="tl-dot" style="border-color:{cp["border"]};background:{cp["bg"]};"></div>'
+                f'    {vline}'
+                f'  </div>'
+                f'  <div class="ptcard" style="border-color:{cp["border"]}44;">'
+                f'    <div class="ptcard-name">'
+                f'      👤 {player}'
+                f'      {dir_badge}'
+                f'    </div>'
+                f'    {clubs_section}'
+                f'    <div class="ptcard-headline">"{title}"</div>'
+                f'    <div class="mini-bar-bg">'
+                f'      <div class="mini-bar-fill" style="width:{conf_pct}%;background:{cp["border"]};"></div>'
+                f'    </div>'
+                f'    <div class="ptcard-meta">'
+                f'      <span class="conf-pill" style="background:{cp["bg"]};color:{cp["text"]};'
+                f'             border-color:{cp["border"]}66;">{cp["label"]}</span>'
+                f'      <span class="meta-chip" style="background:{lp["bg"]};color:{lp["text"]};'
+                f'             border-color:{lp["border"]};">{league}</span>'
+                f'      <a class="src-link" href="{url}" target="_blank">📡 {source}</a>'
+                f'    </div>'
+                f'  </div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
