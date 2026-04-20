@@ -634,4 +634,21 @@ if query:
         if confidence == 5:
             msg_id = f"confetti_{int(resp_ts)}"
             if msg_id not in st.session_state.confetti_fired:
-                st.session_state.confetti_
+                st.session_state.confetti_fired.add(msg_id)
+                components.html("""
+                <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+                <script>
+                    confetti({ particleCount: 160, spread: 80, origin: { y: 0.6 } });
+                    setTimeout(() => confetti({ particleCount: 80, angle: 60, spread: 55, origin: { x: 0 } }), 300);
+                    setTimeout(() => confetti({ particleCount: 80, angle: 120, spread: 55, origin: { x: 1 } }), 500);
+                </script>
+                """, height=0)
+
+        # ── Save response to chat history ──────────────────────────────
+        st.session_state.messages.append({
+            "role":       "assistant",
+            "content":    response["answer"],
+            "confidence": confidence,
+            "sources":    response.get("sources", []),
+            "ts":         resp_ts,
+        })
