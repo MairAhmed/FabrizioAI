@@ -258,8 +258,47 @@ with st.sidebar:
         st.switch_page("main.py")
 
 
+
+# ── Language & sport display filters (safety net for existing KB articles) ─
+_NON_ENG = frozenset({
+    "les","des","une","dans","avec","pour","mais","très","selon","depuis",
+    "lors","cette","aussi","même","tout","après","avant","dont","jamais",
+    "encore","toujours","peut","être","quand","sous","vers",            # FR
+    "los","las","para","también","pero","están","cuando","donde","aunque",
+    "desde","hasta","nunca","siempre","después","sobre","siendo","según",  # ES
+    "und","nicht","sich","aber","wird","kann","oder","wenn","nach","über",
+    "beim","durch","gegen","ohne","unter","zwischen","dann","schon","dass", # DE
+    "della","dello","degli","delle","nella","sono","hanno","anche","molto",
+    "tutto","dopo","prima","perché","però","ogni","questi","queste",        # IT
+})
+_OTHER_SPORTS = frozenset({
+    "nba","nfl","nhl","mlb","wnba","basketball","american football",
+    "baseball","softball","ice hockey","cricket","test match",
+    "tennis","wimbledon","golf","masters tournament","pga tour",
+    "formula 1","formula one","f1 race","grand prix","motogp","nascar",
+    "rugby union","rugby league","six nations","swimming","athletics",
+    "track and field","cycling","tour de france","boxing","ufc","mma",
+    "volleyball","handball","olympic games","olympics",
+})
+
+def _is_english(title: str, text: str) -> bool:
+    combined = (title + " " + text).lower()
+    words = [w for w in combined.split() if len(w) > 2]
+    if len(words) < 10:
+        return True
+    hits = sum(1 for w in words if w in _NON_ENG)
+    return (hits / len(words)) < 0.06
+
+def _is_football(title: str, text: str) -> bool:
+    combined = (title + " " + text[:500]).lower()
+    return not any(term in combined for term in _OTHER_SPORTS)
+
 # ── Fetch & filter articles ────────────────────────────────────────────────
-all_articles = _processor.get_recent_articles(limit=100, min_confidence=min_conf)
+all_articles = [
+    a for a in _processor.get_recent_articles(limit=200, min_confidence=min_conf)
+    if _is_english(a.get("title", ""), a.get("text", ""))
+    and _is_football(a.get("title", ""), a.get("text", ""))
+]
 
 # League filter
 def article_matches_league(article: dict, filters: list[str]) -> bool:

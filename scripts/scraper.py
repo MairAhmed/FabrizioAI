@@ -197,6 +197,58 @@ HEADERS = {
 }
 
 REQUEST_TIMEOUT = 6        # seconds per individual HTTP request (fail fast)
+
+# ── Language & sport filters ───────────────────────────────────────────────
+# Words that are strong signals the text is NOT in English.
+# Chosen to avoid false positives with English words (e.g. "in", "con", "a").
+_FRENCH_MARKERS: frozenset[str] = frozenset({
+    "les", "des", "une", "dans", "avec", "pour", "mais", "très",
+    "selon", "depuis", "lors", "cette", "aussi", "même", "tout",
+    "après", "avant", "ainsi", "dont", "comme", "entre", "jamais",
+    "encore", "toujours", "déjà", "peut", "être", "votre", "notre",
+    "dont", "quand", "sous", "vers", "jusqu",
+})
+_SPANISH_MARKERS: frozenset[str] = frozenset({
+    "los", "las", "para", "también", "pero", "están", "cuando",
+    "donde", "aunque", "desde", "hasta", "nunca", "siempre",
+    "después", "sobre", "ahora", "antes", "luego", "siendo",
+    "tienen", "puede", "debe", "hace", "será", "según", "está",
+    "están", "todo", "todos", "todas", "esto", "este", "esta",
+})
+_GERMAN_MARKERS: frozenset[str] = frozenset({
+    "und", "nicht", "sich", "aber", "wird", "kann", "oder",
+    "wenn", "nach", "über", "beim", "durch", "gegen", "ohne",
+    "unter", "zwischen", "dann", "schon", "noch", "auch", "dass",
+    "haben", "sein", "einer", "einen", "einem", "keine", "mehr",
+})
+_ITALIAN_MARKERS: frozenset[str] = frozenset({
+    "della", "dello", "degli", "delle", "nella", "sono", "hanno",
+    "anche", "molto", "tutto", "dopo", "prima", "perché", "però",
+    "ogni", "altri", "altro", "altra", "questo", "questa", "questi",
+    "queste", "essere", "questi", "quando", "come", "dove",
+})
+_NON_ENGLISH_MARKERS: frozenset[str] = (
+    _FRENCH_MARKERS | _SPANISH_MARKERS | _GERMAN_MARKERS | _ITALIAN_MARKERS
+)
+
+# Sports keywords that indicate the article is NOT about football/soccer.
+_OTHER_SPORT_TERMS: frozenset[str] = frozenset({
+    "nba", "nfl", "nhl", "mlb", "wnba",
+    "basketball", "american football", "gridiron",
+    "baseball", "softball",
+    "ice hockey", "field hockey",
+    "cricket", "test match", "ashes",
+    "tennis", "wimbledon", "us open clay",
+    "golf", "masters tournament", "pga tour",
+    "formula 1", "formula one", "f1 race", "grand prix",
+    "motogp", "nascar",
+    "rugby union", "rugby league", "six nations",
+    "swimming", "athletics", "track and field",
+    "cycling", "tour de france",
+    "boxing", "ufc", "mma",
+    "volleyball", "handball",
+    "olympic games", "olympics",
+})
 SCRAPE_WALL_TIMEOUT = 25   # total wall-clock budget for the whole scrape run
 MAX_ARTICLES_PER_SOURCE = 5
 MAX_SCRAPE_THREADS = 6
@@ -328,6 +380,12 @@ class TransferScraper:
             if text.startswith("@"):
                 continue
 
+            # Drop non-English and non-football tweets
+            if not self._is_english(text, ""):
+                continue
+            if not self._is_football(text, ""):
+                continue
+
             # Build URL — convert nitter path to real Twitter URL
             tweet_link_el = item.select_one("a.tweet-link, a[href*='/status/']")
             tweet_url = base_url  # fallback
@@ -420,6 +478,14 @@ class TransferScraper:
         if not text.strip() or len(text) < 60:
             return None
 
+        # Drop non-English and non-football articles at scrape time
+        if not self._is_english(title, text):
+            print(f"[Scraper] Skipping non-English article: {title[:60]}")
+            return None
+        if not self._is_football(title, text):
+            print(f"[Scraper] Skipping non-football article: {title[:60]}")
+            return None
+
         confidence = self._estimate_confidence(title + " " + text)
         return {
             "title":       title,
@@ -430,6 +496,32 @@ class TransferScraper:
             "league_tags": source["league_tags"],
             "confidence":  confidence,
         }
+
+    # ── Language & sport filters ──────────────────────────────────────────
+    @staticmethod
+    def _is_english(title: str, text: str) -> bool:
+        """
+        Returns False if the article appears to be in French, Spanish,
+        German, or Italian.  Uses marker-word frequency — short texts
+        always pass so player names with accented characters don't get dropped.
+        """
+        combined = (title + " " + text).lower()
+        words = [w for w in combined.split() if len(w) > 2]
+        if len(words) < 10:
+            return True
+        hits = sum(1 for w in words if w in _NON_ENGLISH_MARKERS)
+        return (hits / len(words)) < 0.06   # <6% non-English marker words
+
+    @staticmethod
+    def _is_football(title: str, text: str) -> bool:
+        """
+        Returns False if the article is clearly about a non-football sport.
+        """
+        combined = (title + " " + text[:500]).lower()
+        for term in _OTHER_SPORT_TERMS:
+            if term in combined:
+                return False
+        return True
 
     # ── Confidence heuristic ───────────────────────────────────────────────
     @staticmethod
